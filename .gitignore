@@ -1,0 +1,6 @@
+# ASP runtime: jars, data, regenerable outputs (see docs/ASP-SOP.md for classification)
+server/
+*.jar
+
+# scratch
+.tmp/
