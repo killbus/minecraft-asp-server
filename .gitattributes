@@ -7,3 +7,11 @@
 # picking either side (task state lives in task.json, not index.md). See
 # .trellis/spec/cli/backend/directory-structure.md for details.
 .trellis/workspace/*/journal-*.md merge=union
+
+# Shell scripts must be LF. A CRLF `#!/bin/sh` script still runs under
+# Git Bash (bash strips CR) but breaks under dash, the real /bin/sh on
+# Debian/Ubuntu: variables keep a trailing CR, so `[ "$x" = "1" ]` is
+# false and every path gets a stray \r. Batch files stay CRLF.
+*.sh  text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf

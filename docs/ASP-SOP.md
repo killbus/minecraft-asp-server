@@ -1,7 +1,7 @@
 # AdvancedSlimePaper (ASP) Operations SOP
 
 How to take an ASP server from scratch to production-ready.
-Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-10-31.
+Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-01.
 
 ## 0. Hard rules
 
@@ -20,11 +20,33 @@ Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-10-31.
 | Program (dropped in) | `plugins/asp-plugin-*.jar` | SWP (Slime World Plugin) - "the plugin" in the official docs; released together with the server jar |
 | Program (dropped in) | other `plugins/*.jar` | Geyser, Floodgate, ViaVersion, SkinsRestorer, ... |
 | Config (kept, edited by hand) | `eula.txt`, `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`, `server-icon.png`, per-plugin yml (`worlds.yml`, ...) | `/reload` or restart after edits |
-| Data (not regenerable - back these up) | `world/` (`level.dat`, `dimensions/`, `players/`), `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Backup policy centers on these |
+| Data (not regenerable - back these up) | `world/` (`level.dat`, `data/`, `dimensions/`, `players/`), `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Backup policy centers on these |
 | Regenerable output (safe to delete) | `libraries/`, `versions/`, `cache/`, `logs/`, `.paper/`, `slime_worlds/`, `session.lock`, `level.dat_old`, `*.log` | Rebuilt/re-downloaded at startup; do not copy to a new machine |
 
-`world/` is a mix: `dimensions/`, `level.dat`, `players/` are data;
-`session.lock` and `level.dat_old` are runtime artifacts.
+`world/` is a tree, not a single file. On this build `level.dat` is a
+**slim header** (522 B on the reference world) holding only difficulty,
+spawn, GameType, DataPacks, DataVersion, LevelName and Time. The rest of
+the world state sits beside it and is **authoritative, not cache**:
+
+| Path | Content |
+| --- | --- |
+| `world/data/minecraft/*.dat` | scoreboard, custom boss events, random sequences, stopwatches, world clocks |
+| `world/dimensions/minecraft/<dim>/data/minecraft/*.dat` | game rules, world generation settings (**including the seed**), weather, raids, world border, scheduled events, chunk tickets |
+| `world/dimensions/minecraft/<dim>/data/paper/*.dat` | Paper metadata, level overrides, persistent data container |
+| `world/players/` | player data, advancements, stats |
+
+Verified by decompressing `level.dat` on the reference world: it contains
+none of `GameRules`, `WorldGenSettings`, `WeatherData`, `Scoreboard`,
+`CustomBossEvents`, `WorldBorder`, `ScheduledEvents` or `seed`.
+`game_rules.dat` keeps its world-creation mtime across boots, so it is
+read at load rather than regenerated.
+
+Consequence: **back up and restore the whole `world/` tree.** Copying only
+`level.dat` produces a world with default game rules, a different seed,
+reset weather and an empty scoreboard.
+
+`session.lock` and `level.dat_old` are runtime artifacts and are excluded
+from backups.
 
 ## 2. Deploy from scratch
 
@@ -63,6 +85,37 @@ Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-10-31.
    `Completed Vanilla import for world '...'`, then `Done (..s)`.
 5. Migration completes when `world/level.dat` grows (a placeholder is a
    few bytes) and `world/level.dat_old` appears.
+
+### Restoring from a backup
+
+A backup directory is valid only when it contains `COMPLETE`. Directories
+without it are partial leftovers: `backup.cmd` / `backup.sh` delete them on
+the next run and never count them against retention.
+
+1. Stop the server with `stop`. Never restore under a running server.
+2. Verify the backup before touching anything:
+   `cd backups/<timestamp> && sha256sum -c MANIFEST.txt`
+   Every line must read `OK`. If any line fails, the backup is unusable -
+   pick an older one.
+3. Move the current world aside rather than deleting it:
+   `world/` -> `world.broken-<date>/`.
+4. Copy the **entire** `world/` tree from the backup into `server/world/`.
+   That includes `data/` and `dimensions/*/data/` - see section 1 for why
+   `level.dat` alone is not enough.
+5. Restore the rest of the backup over the server dir: `config/`,
+   `plugins/<name>/`, `plugins/*.yml`, and the top-level `*.json`, `*.yml`,
+   `server.properties`, `eula.txt`, `server-icon.png`. Plugin jars are not
+   in the backup - they stay as they are.
+6. Start the server and confirm `Done (..s)!` with no `Failed to load
+   world` and no `Exception`.
+7. Keep `world.broken-<date>/` until the restored world has been played on
+   once and looks right, then delete it.
+
+Drill result (backup `20261031-163649`, restored into an isolated copy of
+`server/`): 256/256 files matched the manifest, the server booted to
+`Done (45.454s)!`, all eight plugins enabled, and `stop` exited with code
+0. After the boot only 13 files differed from the manifest - the two port
+edits, `world/level.dat`, and the world state `.dat` files written on save.
 
 ## 4. Third-party plugins
 
@@ -104,6 +157,8 @@ with no `Failed to load plugin` / stack traces; plugin visible in
 - [ ] `stop` exits cleanly; second cold start reaches `Done` quickly
       (no migration/patch phase)
 - [ ] Data dirs are in the backup set: `world/` + whitelist/ban/usercache
+- [ ] A backup with `COMPLETE` exists and `sha256sum -c MANIFEST.txt`
+      passes inside it
 
 ## 6. Running the server
 
@@ -120,6 +175,46 @@ with no `Failed to load plugin` / stack traces; plugin visible in
   - `scripts/start.sh` (Linux/macOS): `JAVA` env override, fails fast
     on a missing or non-25 JDK, runs foreground via `exec`.
     Unattended: `nohup scripts/start.sh &` or a systemd unit.
+- Both wrappers take a backup before launching (`scripts/backup.cmd` /
+  `scripts/backup.sh`). The server is stopped at that moment, so the
+  snapshot is consistent - for a server that is not running 24/7 this is
+  the natural backup point and needs no scheduler.
+  - `ASP_SKIP_BACKUP=1` starts without backing up.
+  - `BACKUP_MIN_INTERVAL` skips the backup only when *every* target
+    already holds a complete backup that recent (60 minutes when called
+    from a start script, 0 when `backup.*` is run directly). This keeps
+    restart loops from pushing older backups out of the retention
+    window, while a target that fell behind still gets a catch-up run.
+  - A failed pre-start backup prints a warning and the server still
+    starts. A missing backup is a reason to read the log, not a reason
+    to keep the world offline.
+- **Targets are a list at the top of each backup script**
+  (`BACKUP_TARGETS`), not a single directory. The default is one entry,
+  `../backups`; add more to keep a copy on a second disk. This matters
+  because backups on the same volume as `server/` are one copy with five
+  timestamps, not five copies.
+  - Entries are newline-separated in `backup.sh` and semicolon-separated
+    in `backup.cmd`. A relative path resolves against the script's own
+    directory; absolute paths are used as-is.
+  - The **first** entry is the primary target: if it fails, the run
+    fails. Later entries are mirrors: a mirror failure prints a warning
+    and the run still succeeds, so an unplugged USB disk does not stop
+    the local backup. `BACKUP_REQUIRE_ALL=1` makes any mirror failure
+    fatal.
+  - Every target gets its own full copy and its own `MANIFEST.txt`, so
+    the copies are independent - one bad disk cannot corrupt the other.
+    Cost is one extra read of `server/` per target (53 MB here).
+- Backups land in `<target>/<UTC timestamp>/` (53 MB for the reference
+  world, ~96% of it `world/`). Retention is the newest 5 complete
+  backups **per target**; partial directories are deleted and never
+  counted.
+- Pruning only touches directories named like our own timestamps
+  (`YYYYMMDD-HHMMSS`). A target may therefore point at a shared folder
+  without the script deleting anything else in it.
+- `backup.*` refuses to run while the server is up, because copying a
+  live world can produce torn region files and SQLite databases
+  (CoreProtect, GrimAC). `ALLOW_ONLINE=1` overrides it and prints a
+  warning; use it only when you accept an inconsistent snapshot.
 - `online-mode=false` is intentional on this deployment: it is
   Floodgate's operating model (section 7).
 
