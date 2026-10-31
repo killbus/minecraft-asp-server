@@ -4,3 +4,6 @@ server/
 
 # scratch
 .tmp/
+
+# local backup output (scripts/backup.cmd, scripts/backup.sh)
+backups/

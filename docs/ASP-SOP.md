@@ -1,7 +1,7 @@
 # AdvancedSlimePaper (ASP) Operations SOP
 
 How to take an ASP server from scratch to production-ready.
-Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-10-17.
+Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-10-31.
 
 ## 0. Hard rules
 
@@ -19,8 +19,8 @@ Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-10-17.
 | Program (dropped in by operator) | `asp-server.jar` | The server itself; manifest `Main-Class: io.papermc.paperclip.Main` (Paperclip launcher) |
 | Program (dropped in) | `plugins/asp-plugin-*.jar` | SWP (Slime World Plugin) - "the plugin" in the official docs; released together with the server jar |
 | Program (dropped in) | other `plugins/*.jar` | Geyser, Floodgate, ViaVersion, SkinsRestorer, ... |
-| Config (kept, edited by hand) | `eula.txt`, `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, per-plugin yml (`worlds.yml`, ...) | `/reload` or restart after edits |
-| Data (not regenerable - back these up) | `world/` (`level.dat`, `dimensions/`, `players/`), `whitelist.json`, `banned-*.json`, `usercache.json` | Backup policy centers on these |
+| Config (kept, edited by hand) | `eula.txt`, `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`, `server-icon.png`, per-plugin yml (`worlds.yml`, ...) | `/reload` or restart after edits |
+| Data (not regenerable - back these up) | `world/` (`level.dat`, `dimensions/`, `players/`), `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Backup policy centers on these |
 | Regenerable output (safe to delete) | `libraries/`, `versions/`, `cache/`, `logs/`, `.paper/`, `slime_worlds/`, `session.lock`, `level.dat_old`, `*.log` | Rebuilt/re-downloaded at startup; do not copy to a new machine |
 
 `world/` is a mix: `dimensions/`, `level.dat`, `players/` are data;
@@ -132,6 +132,11 @@ with no `Failed to load plugin` / stack traces; plugin visible in
   server will not authenticate accounts and any username can connect.
   This is the documented trade-off of Floodgate
   (https://geysermc.org/wiki/floodgate/).
+- `white-list=false` is an intentional, recorded decision (not an
+  oversight). Combined with `online-mode=false` it means anyone can join
+  with any username. Accepted for this small private SMP; if that changes,
+  set `white-list=true` and populate `whitelist.json` (it is in the backup
+  set) before exposing the port.
 - Without ViaVersion, Geyser on 26.2 warns that it targets a newer Java
   protocol (26.3); installing ViaVersion removes the warning.
 - The SWP install doc page
