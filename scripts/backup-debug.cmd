@@ -15,7 +15,7 @@ REM ============================================================
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-set "KEEP=10"
+set "KEEP=5"
 if "%~1"=="" (set "SERVER_DIR=%~dp0..\server") else (set "SERVER_DIR=%~1")
 set "BACKUP_ROOT=%~dp0..\backups"
 

@@ -17,7 +17,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-KEEP="${KEEP:-10}"
+KEEP="${KEEP:-5}"
 if [ $# -ge 1 ]; then SERVER_DIR="$1"; else SERVER_DIR="$(pwd)/../server"; fi
 BACKUP_ROOT="${BACKUP_ROOT:-$(pwd)/../backups}"
 TS="$(date -u +%Y%m%d-%H%M%S)"
