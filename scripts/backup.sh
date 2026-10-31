@@ -60,10 +60,10 @@ for d in "$SERVER_DIR"/plugins/*/; do
 done
 cp "$SERVER_DIR"/plugins/*.yml "$DEST/plugins/" 2>/dev/null || true
 
-# --- manifest ---
+# --- manifest: hash every backed-up file (world included) ---
 {
-    echo "ASP backup $TS"
-    (cd "$DEST" && find . -name '*.json' -type f -exec sha256sum {} +)
+    echo "# ASP backup $TS"
+    (cd "$DEST" && find . -type f ! -name MANIFEST.txt | LC_ALL=C sort | while IFS= read -r f; do sha256sum --text "$f"; done)
 } > "$DEST/MANIFEST.txt"
 
 # --- prune: keep newest $KEEP (dir names are timestamps) ---

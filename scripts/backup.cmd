@@ -52,9 +52,12 @@ REM --- plugin dirs: config + data, jars excluded ---
 for /d %%d in ("%SERVER_DIR%\plugins\*") do robocopy "%%~d" "%DEST%\plugins\%%~nxd" /MIR /XF *.jar /NFL /NDL /NJH /NJS /NP >nul
 copy /Y "%SERVER_DIR%\plugins\*.yml" "%DEST%\plugins\" >nul 2>nul
 
-REM --- manifest ---
-> "%DEST%\MANIFEST.txt" echo ASP backup %TS%
-for %%f in ("%DEST%\*.json") do certutil -hashfile "%%~f" SHA256 >> "%DEST%\MANIFEST.txt"
+REM --- manifest: hash every backed-up file (world included) ---
+powershell -NoProfile -Command "$d=(Resolve-Path -LiteralPath $env:DEST).Path; $o=@('# ASP backup ' + $env:TS); $sha=[System.Security.Cryptography.SHA256]::Create(); $fs=[System.IO.Directory]::GetFiles($d,'*',[System.IO.SearchOption]::AllDirectories); [Array]::Sort($fs,[System.StringComparer]::Ordinal); foreach ($f in $fs) { if ([System.IO.Path]::GetFileName($f) -ne 'MANIFEST.txt') { $s=[System.IO.File]::OpenRead($f); $h=([System.BitConverter]::ToString($sha.ComputeHash($s)) -replace '-','').ToLower(); $s.Dispose(); $rel=$f.Substring($d.Length+1).Replace([char]92,'/'); $o += ('{0}  ./{1}' -f $h, $rel) } }; [System.IO.File]::WriteAllText((Join-Path $d 'MANIFEST.txt'), (($o -join [char]10) + [char]10), [System.Text.Encoding]::ASCII)"
+if errorlevel 1 (
+    echo [backup] ERROR: manifest generation failed
+    exit /b 1
+)
 
 REM --- prune: keep newest %KEEP% (dir names are timestamps) ---
 set /a n=0
