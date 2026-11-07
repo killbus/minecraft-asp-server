@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "notes": "Initial observed inventory recorded on 2026-11-08. JAR hashes describe existing local files; their original downloads were not independently verified. Versions/builds come from embedded metadata and the recorded ASP boot log. Source URLs are project references unless a specific release is linked; download_url is omitted when the original fixed URL is unknown.",
+  "datapack_directories": [
+    "world/datapacks"
+  ],
+  "artifacts": [
+    {
+      "id": "advanced-slime-paper",
+      "kind": "server",
+      "path": "asp-server.jar",
+      "version": "26.2.build.128-stable",
+      "build": "817eeca",
+      "source": "https://infernalsuite.com/download/asp/",
+      "sha256": "d36637dc8d8a678c27726e0b3824aa80d8785bad5c3742ce1ae55f4c5c6c4740"
+    },
+    {
+      "id": "asp-plugin",
+      "kind": "plugin",
+      "path": "plugins/asp-plugin-4.2.0-SNAPSHOT.jar",
+      "version": "4.2.0-SNAPSHOT",
+      "build": "817eeca984157b410f5d507b70d4e5949574769d",
+      "source": "https://infernalsuite.com/download/asp/",
+      "notes": "Version label from the installed filename; paper-plugin.yml reports the build commit as its version. Keep paired with the server build.",
+      "sha256": "ddc2fea51764378cba8aa58c09e84b6da3e049df9fac0991e960ba39ec59015d"
+    },
+    {
+      "id": "coreprotect",
+      "kind": "plugin",
+      "path": "plugins/CoreProtect-CE-24.1.jar",
+      "version": "24.1",
+      "source": "https://coreprotect.net/",
+      "notes": "Upstream project reference from plugin.yml; the distributor/build of this CE-named JAR is not established.",
+      "sha256": "a2acef7c06ef201355cef07d591a6055dfed358ad768faaaaaf4e276865ecc97"
+    },
+    {
+      "id": "floodgate",
+      "kind": "plugin",
+      "path": "plugins/Floodgate-Spigot.jar",
+      "version": "2.2.5-SNAPSHOT",
+      "build": "b141-81b65cc",
+      "source": "https://geysermc.org/download/",
+      "sha256": "21570aff9ce17d6983928e8552777760e1ede5050026b04c686b0ae112e6fd7e"
+    },
+    {
+      "id": "geyser-spigot",
+      "kind": "plugin",
+      "path": "plugins/Geyser-Spigot.jar",
+      "version": "2.12.0-SNAPSHOT",
+      "build": "b1259-0e94972f1cdf08f2a4f24974ff3e94f112d9d60a",
+      "source": "https://geysermc.org/download/",
+      "sha256": "79ec9a7e6aba1ff0d401c0c3f052297c9c339b3958bacb3537c5a725be60c172"
+    },
+    {
+      "id": "grimac",
+      "kind": "plugin",
+      "path": "plugins/grimac-bukkit-2.3.75-1299a2a.jar",
+      "version": "2.3.75-1299a2a",
+      "build": "1299a2a",
+      "source": "https://grim.ac/",
+      "sha256": "080e01c5545695b7e755f705d73da49c5eae9b86d67f1425f88f2c7b414f8da9"
+    },
+    {
+      "id": "skinsrestorer",
+      "kind": "plugin",
+      "path": "plugins/SkinsRestorer.jar",
+      "version": "15.12.6",
+      "source": "https://skinsrestorer.net/",
+      "sha256": "a85b4a370f988741c9a38f4d0498262edacbf3220314790ac1c127461996359c"
+    },
+    {
+      "id": "viabackwards",
+      "kind": "plugin",
+      "path": "plugins/ViaBackwards.jar",
+      "version": "5.12.2-SNAPSHOT",
+      "source": "https://viaversion.com/backwards",
+      "notes": "Exact CI build number and original artifact URL were not recovered; SHA-256 identifies this snapshot.",
+      "sha256": "a88617fa001469c3be0c8ba7f24a5bb2593294d176c1f81041d6bf4482c5d726"
+    },
+    {
+      "id": "viaversion",
+      "kind": "plugin",
+      "path": "plugins/ViaVersion.jar",
+      "version": "5.12.2-SNAPSHOT",
+      "source": "https://viaversion.com/",
+      "notes": "Exact CI build number and original artifact URL were not recovered; SHA-256 identifies this snapshot.",
+      "sha256": "5b76329e2c832746dac7cae47a8b688bcba8d31254b6872134e98ae7d5c561d4"
+    },
+    {
+      "id": "mcpeachpies-multiplayer-sleeping",
+      "kind": "datapack",
+      "path": "world/datapacks/mcpeachpies_multiplayer_sleeping-1.2.8-MC26.1.zip",
+      "version": "1.2.8-MC26.1",
+      "source": "https://modrinth.com/datapack/mcpeachpies-multiplayer-sleeping/version/rsaxfkXR",
+      "download_url": "https://cdn.modrinth.com/data/x5Uvuum0/versions/rsaxfkXR/mcpeachpies_multiplayer_sleeping-1.2.8-MC26.1.zip",
+      "notes": "Local ZIP SHA-512 matched the Modrinth API file hash for version rsaxfkXR when recorded.",
+      "sha256": "c2511c890048a478c77d8f0374e00ae5b03841458f4fd750c3f469092dcc9ed6"
+    }
+  ]
+}

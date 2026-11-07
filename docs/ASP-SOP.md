@@ -1,7 +1,7 @@
 # AdvancedSlimePaper (ASP) Operations SOP
 
 How to take an ASP server from scratch to production-ready.
-Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-01.
+Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-08.
 
 ## 0. Hard rules
 
@@ -19,6 +19,7 @@ Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-01.
 | Program (dropped in by operator) | `asp-server.jar` | The server itself; manifest `Main-Class: io.papermc.paperclip.Main` (Paperclip launcher) |
 | Program (dropped in) | `plugins/asp-plugin-*.jar` | SWP (Slime World Plugin) - "the plugin" in the official docs; released together with the server jar |
 | Program (dropped in) | other `plugins/*.jar` | Geyser, Floodgate, ViaVersion, SkinsRestorer, ... |
+| Program (dropped in) | `world/datapacks/*.zip` | World datapacks, not plugins; included in the whole-world backup |
 | Config (kept, edited by hand) | `eula.txt`, `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`, `server-icon.png`, per-plugin yml (`worlds.yml`, ...) | `/reload` or restart after edits |
 | Data (not regenerable - back these up) | `world/` (`level.dat`, `data/`, `dimensions/`, `players/`), `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Backup policy centers on these |
 | Regenerable output (safe to delete) | `libraries/`, `versions/`, `cache/`, `logs/`, `.paper/`, `slime_worlds/`, `session.lock`, `level.dat_old`, `*.log` | Rebuilt/re-downloaded at startup; do not copy to a new machine |
@@ -105,7 +106,9 @@ the next run and never count them against retention.
 5. Restore the rest of the backup over the server dir: `config/`,
    `plugins/<name>/`, `plugins/*.yml`, and the top-level `*.json`, `*.yml`,
    `server.properties`, `eula.txt`, `server-icon.png`. Plugin jars are not
-   in the backup - they stay as they are.
+   in the backup. Reconcile them with the lock revision associated with
+   this backup before starting; a newer plugin may not work with older
+   restored data. See section 4.1.
 6. Start the server and confirm `Done (..s)!` with no `Failed to load
    world` and no `Exception`.
 7. Keep `world.broken-<date>/` until the restored world has been played on
@@ -119,15 +122,18 @@ edits, `world/level.dat`, and the world state `.dat` files written on save.
 
 ## 4. Third-party plugins
 
-Current deployment:
+Plugin roles (exact installed versions, paths and hashes live in
+[`runtime.lock.json`](../runtime.lock.json)):
 
-| Plugin | Version | Notes |
-| --- | --- | --- |
-| SWP (ASPaperPlugin) | 4.2.0-SNAPSHOT | shipped with the server jar |
-| Geyser-Spigot | 2.12.0-b1259 | Bedrock bridge, UDP 19132 |
-| Floodgate | 2.2.5-SNAPSHOT (b141) | Bedrock accounts joining; depends on Geyser |
-| ViaVersion / ViaBackwards | 5.12.2-SNAPSHOT | cross-version protocol bridge |
-| SkinsRestorer | 15.12.6 | runs in Floodgate Mode while Floodgate is present |
+| Plugin | Notes |
+| --- | --- |
+| SWP (ASPaperPlugin) | shipped with the server jar; keep the builds paired |
+| Geyser-Spigot | Bedrock bridge, UDP 19132 |
+| Floodgate | Bedrock accounts joining; used alongside Geyser |
+| ViaVersion / ViaBackwards | cross-version protocol bridge |
+| SkinsRestorer | runs in Floodgate Mode while Floodgate is present |
+| CoreProtect | block logging and rollback; local file is CE-named |
+| GrimAC | anti-cheat |
 
 Download endpoints:
 
@@ -144,6 +150,129 @@ Download endpoints:
 Generic acceptance: the boot log shows `[Plugin] Enabling Plugin vX`
 with no `Failed to load plugin` / stack traces; plugin visible in
 `/plugins`.
+
+### 4.1 Runtime inventory and offline verification
+
+Keep `server/` ignored by Git. Track **metadata, not binaries**, in
+`runtime.lock.json`. The lock records the intended file inventory, not
+whether a plugin or datapack is enabled. It contains no compatibility
+status or acceptance workflow: a matching hash is not a compatibility or
+security guarantee.
+
+Run from the repository root with Python 3.10+ (standard library only):
+
+```sh
+python -B scripts/verify_runtime.py
+```
+
+On systems where Python 3 is named `python3`, use that instead. Default
+lock and server paths are relative to the script's repository, regardless
+of the current directory. Explicit `--lock` and `--server-dir` paths are
+relative to the caller's current directory:
+
+```sh
+python -B scripts/verify_runtime.py --lock runtime.lock.json --server-dir server
+```
+
+The command is offline and read-only: no downloads, file replacement,
+automatic hash adoption, lock rewriting, or server startup. It is not
+wired into the start scripts. Run it manually after an installation,
+upgrade or restore, with no artifact changes in progress.
+
+| Result | Meaning |
+| --- | --- |
+| `OK` | Declared file exists and its SHA-256 matches |
+| `MISSING` | Declared file is absent |
+| `MODIFIED` | Content differs; expected and actual SHA-256 are printed |
+| `UNMANAGED` | An installation file is present but not in the lock |
+| `ERROR` | Invalid lock, unsafe path, or incomplete check due to an I/O error |
+
+Exit codes: **0** = all match, **1** = inventory drift, **2** = invalid
+input or an incomplete check. Fix the input/read error before trusting
+a result; do not overwrite a stored hash just to make the check green.
+
+Scan boundaries are deliberately narrow:
+
+- Direct `server/*.jar` (the declared server must be `asp-server.jar`).
+- Direct `server/plugins/*.jar`; no recursion into plugin directories.
+- Direct ZIP files in each explicitly listed `datapack_directories`
+  entry, currently `world/datapacks`. An unpacked directory containing
+  `pack.mcmeta` is reported as `UNMANAGED`; v1 locks ZIPs only.
+- No scanning of other worlds, caches, remapped JARs, dependencies,
+  configuration or player data. Add another world's datapack directory
+  explicitly when needed; changing `level-name` does not change the lock.
+
+Missing scan directories are allowed if no declared file requires them;
+a missing server root is an error. Paths resolving outside the server
+root through symlinks or junctions are refused.
+
+**Lock format:** `schema_version` is `1`; `datapack_directories` is an
+array of paths; `artifacts` contains exactly one server and any plugins
+or datapacks. Each artifact requires:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Stable, unique component identifier |
+| `kind` | `server`, `plugin` or `datapack` |
+| `path` | Exact install path relative to `server/`, using `/` |
+| `version` | Human-readable version string, including SNAPSHOT if applicable |
+| `source` | HTTP(S) project or specific release URL |
+| `sha256` | 64 hexadecimal digits identifying the installed file |
+
+Optional fields are `build` (nonblank string), `download_url` (fixed
+artifact URL), and `notes` (string). Top-level `notes` is also optional.
+Record a build number or commit for snapshots when known. Omit unknown
+builds/URLs rather than inventing them; do not use `latest` or
+`lastStableBuild` as a pinned download URL. Those endpoints in section 4
+are discovery aids, not reproducible artifact references. A `source`
+project link does not prove where an existing local file was downloaded.
+
+Paths must be normalized relative paths with no `..`, backslashes, or
+Windows-invalid punctuation. IDs must be unique; duplicate paths and
+scan directories are rejected case-insensitively for portability.
+The initial lock is an observed local inventory, with evidence limits
+noted in the file. It does not assert that every existing JAR was matched
+against an upstream release.
+
+**Install or upgrade:**
+
+1. Choose the exact artifact and record its project/release URL and
+   version. Stop the server and run `scripts/backup.cmd` (Windows) or
+   `sh scripts/backup.sh` (POSIX); confirm a successful complete backup.
+2. Keep the old lock revision and old JARs outside the scanned install
+   directories. Put plugin JARs in `server/plugins/`. Put datapack ZIPs
+   directly in `server/world/datapacks/`, without extracting them; their
+   archive root must contain `pack.mcmeta` and `data/`. Move obsolete
+   versions aside rather than leaving two copies installed.
+3. Calculate SHA-256 and deliberately edit the relevant lock entry with
+   its path, version, source and hash. For example, PowerShell:
+   `Get-FileHash -Algorithm SHA256 -LiteralPath 'server/plugins/Geyser-Spigot.jar'`;
+   POSIX: `sha256sum server/plugins/Geyser-Spigot.jar`.
+4. Run the verifier, resolve any unexpected difference, then start the
+   server normally. Commit the reviewed lock change to record the
+   installation. No separate compatibility sign-off is required by this
+   inventory mechanism.
+
+For removal, stop the server, move the artifact outside its installation
+directory, remove its lock entry, and verify again. Follow the component's
+own uninstall instructions for any persistent data; this tool only tracks
+files.
+
+**Backups and rollback:** backup `MANIFEST.txt` checks the integrity of
+that backup; `runtime.lock.json` identifies the intended runtime files.
+Before an upgrade, record the old lock commit with the backup (or keep a
+copy of that lock beside it). The backup scripts do not do this
+automatically. They exclude program JARs, while the whole-world copy
+includes datapack ZIPs. Retain old JARs outside Git since upstream may
+remove a build. On rollback, restore matching binaries and lock revision;
+if an upgrade changed world/config/plugin data, restore the corresponding
+backup as well. A Git lock change alone does not roll back the server.
+
+Verifier regression tests use isolated temporary fixtures:
+
+```sh
+python -B -m unittest discover -s tests -v
+```
 
 ## 5. Acceptance checklist (production gate)
 
@@ -334,4 +463,3 @@ Deprecated sources (do not cite):
 - https://docs.geysermc.org/ (404; current docs live under https://geysermc.org/wiki/)
 - https://api.geysermc.org/v1 and https://download.geysermc.org/v1 (Not Found; v2 works)
 - GeyserMC repos have no GitHub Releases/tags; artifacts come from download.geysermc.org/v2
-
