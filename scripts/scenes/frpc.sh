@@ -281,9 +281,9 @@ cmd_up() {
     _server_command_quoted=$_q_result
 
     if [ "$_dry_run" -eq 1 ]; then
-        printf 'tmux set-option -s history-limit 50000\n'
         printf 'tmux new-session -d -P -F %s -s %s -n %s -c %s -- cat\n' \
             "'#{window_id}'" "$SESSION" "$SERVER_WINDOW" "$_root_quoted"
+        printf 'tmux set-option -s history-limit 50000\n'
         printf 'tmux set-window-option -t <server-window-id> remain-on-exit on\n'
         printf 'tmux set-window-option -t <server-window-id> monitor-activity on\n'
         printf 'tmux respawn-window -k -t <server-window-id> %s\n' "$_server_command_quoted"
@@ -325,10 +325,12 @@ EOF
         return 0
     fi
 
-    tmux set-option -s history-limit 50000
-
     if ! _server_window_id=$(tmux new-session -d -P -F '#{window_id}' -s "$SESSION" -n "$SERVER_WINDOW" -c "$ROOT" -- cat); then
         echo "[frpc] ERROR: could not create tmux session $SESSION" >&2
+        exit 1
+    fi
+    if ! tmux set-option -s history-limit 50000; then
+        echo "[frpc] ERROR: could not configure the tmux server" >&2
         exit 1
     fi
     if ! tmux set-window-option -t "$_server_window_id" remain-on-exit on; then
