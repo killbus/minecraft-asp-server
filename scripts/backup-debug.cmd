@@ -8,6 +8,7 @@ REM
 REM  Scope (see docs/ASP-SOP.md section 1 - not regenerable):
 REM    world/ + whitelist/ban/usercache/ops json + server config
 REM    + config/ (Paper) + per-plugin config dirs (jars excluded)
+REM    Known-regenerable plugin caches are excluded (see below).
 REM  Output: <target>\<UTC timestamp>\ with MANIFEST.txt
 REM
 REM  Every configured target gets its own full copy and its own manifest,
@@ -207,8 +208,14 @@ if exist "%SERVER_DIR%\config" (
 if defined ERRMSG goto :dt_fail
 
 REM --- plugin dirs: config + data, jars excluded ---
+REM Only caches proven regenerable in docs/ASP-SOP.md section 1 are
+REM excluded. Do not widen this to every */cache/: a plugin may keep
+REM real state in a directory with that name.
 for /d %%d in ("%SERVER_DIR%\plugins\*") do (
-    robocopy "%%~d" "%DEST%\plugins\%%~nxd" /MIR /XF *.jar /NFL /NDL /NJH /NJS /NP >nul
+    set "EXCLUDE_CACHE="
+    if /i "%%~nxd"=="Geyser-Spigot" set "EXCLUDE_CACHE=/XD "%%~fd\cache""
+    if /i "%%~nxd"=="SkinsRestorer" set "EXCLUDE_CACHE=/XD "%%~fd\cache""
+    robocopy "%%~d" "%DEST%\plugins\%%~nxd" /MIR /XF *.jar !EXCLUDE_CACHE! /NFL /NDL /NJH /NJS /NP >nul
     if errorlevel 8 if not defined ERRMSG set "ERRMSG=plugin copy failed: %%~nxd"
 )
 if defined ERRMSG goto :dt_fail

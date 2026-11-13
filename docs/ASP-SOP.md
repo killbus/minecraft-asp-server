@@ -22,6 +22,7 @@ Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-14.
 | Program (dropped in) | `world/datapacks/*.zip` | World datapacks, not plugins; included in the whole-world backup |
 | Config (kept, edited by hand) | `eula.txt`, `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`, `server-icon.png`, per-plugin yml (`worlds.yml`, ...) | `/reload` or restart after edits |
 | Data (not regenerable - back these up) | `world/` (`level.dat`, `data/`, `dimensions/`, `players/`), `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Backup policy centers on these |
+| Sensitive instance state (back up, never commit) | `plugins/Geyser-Spigot/nethernet/` (`provider-state/`, `identity.pem`, `operator-link.txt`) | NetherNet/Warden identity; restoring it keeps the same `*.wdn.gg` name. Contains a private key - never commit, share or paste it |
 | Regenerable output (safe to delete) | `libraries/`, `versions/`, `cache/`, `logs/`, `.paper/`, `slime_worlds/`, `session.lock`, `level.dat_old`, `*.log` | Rebuilt/re-downloaded at startup; do not copy to a new machine |
 
 `world/` is a tree, not a single file. On this build `level.dat` is a
@@ -48,6 +49,11 @@ reset weather and an empty scoreboard.
 
 `session.lock` and `level.dat_old` are runtime artifacts and are excluded
 from backups.
+
+Known-regenerable plugin caches (`plugins/Geyser-Spigot/cache/`,
+`plugins/SkinsRestorer/cache/`) are also excluded from backups. Do not
+generalize this to every `*/cache/` directory: a plugin may keep real
+state under that name, so each exclusion needs the same evidence.
 
 ## 2. Deploy from scratch
 
@@ -104,11 +110,12 @@ the next run and never count them against retention.
    That includes `data/` and `dimensions/*/data/` - see section 1 for why
    `level.dat` alone is not enough.
 5. Restore the rest of the backup over the server dir: `config/`,
-   `plugins/<name>/`, `plugins/*.yml`, and the top-level `*.json`, `*.yml`,
-   `server.properties`, `eula.txt`, `server-icon.png`. Plugin jars are not
-   in the backup. Reconcile them with the lock revision associated with
-   this backup before starting; a newer plugin may not work with older
-   restored data. See section 4.1.
+   `plugins/<name>/` (including `plugins/Geyser-Spigot/nethernet/`, which
+   keeps the server's Warden host name), `plugins/*.yml`, and the top-level
+   `*.json`, `*.yml`, `server.properties`, `eula.txt`, `server-icon.png`.
+   Plugin jars are not in the backup. Reconcile them with the lock revision
+   associated with this backup before starting; a newer plugin may not work
+   with older restored data. See section 4.1.
 6. Start the server and confirm `Done (..s)!` with no `Failed to load
    world` and no `Exception`.
 7. Keep `world.broken-<date>/` until the restored world has been played on
@@ -318,7 +325,8 @@ P-384 machine key, the saved registration/challenge and
 
 - Changing `advertise-addresses` does not re-register anything; the saved
   identity keeps the same Warden host name. Keep the directory with the
-  server's own data and back it up if that host name matters.
+  server's own data: it is in the backup set (section 1), and it is
+  sensitive - never commit or share it.
 - A directory that is wiped on every restart registers a new service per
   boot (new `*.wdn.gg` name) and leaves orphans behind. Set
   `advanced.nxs.deregister-on-shutdown: true` on container-style hosts.
@@ -356,7 +364,8 @@ logs, and `/geyser nethernet status`, `/geyser nethernet diagnostics` or
       line above
 - [ ] `stop` exits cleanly; second cold start reaches `Done` quickly
       (no migration/patch phase)
-- [ ] Data dirs are in the backup set: `world/` + whitelist/ban/usercache
+- [ ] Data dirs are in the backup set: `world/` + whitelist/ban/usercache,
+      plus `plugins/Geyser-Spigot/nethernet/` when Bedrock uses NetherNet
 - [ ] A backup with `COMPLETE` exists and `sha256sum -c MANIFEST.txt`
       passes inside it
 

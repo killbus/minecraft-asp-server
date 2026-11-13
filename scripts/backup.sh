@@ -8,6 +8,7 @@
 #  Scope (see docs/ASP-SOP.md section 1 - not regenerable):
 #    world/ + whitelist/ban/usercache/ops json + server config
 #    + config/ (Paper) + per-plugin config dirs (jars excluded)
+#    Known-regenerable plugin caches are excluded (see below).
 #  Output: <target>/<UTC timestamp>/ with MANIFEST.txt
 #
 #  Every configured target gets its own full copy and its own manifest,
@@ -209,13 +210,24 @@ do_target() {
     fi
 
     # --- plugin dirs: config + data, jars excluded ---
+    # Only caches proven regenerable in docs/ASP-SOP.md section 1 are
+    # excluded. Do not widen this to every */cache/: a plugin may keep
+    # real state in a directory with that name.
     mkdir -p "$dest/plugins" || return 1
     for d in "$SERVER_DIR"/plugins/*/; do
         [ -d "$d" ] || continue
         name="$(basename "$d")"
         mkdir -p "$dest/plugins/$name" || return 1
-        tar cf - --exclude='*.jar' -C "$d" . | tar xf - -C "$dest/plugins/$name"
-        src_count=$(find "$d" -type f ! -name '*.jar' | wc -l)
+        case "$name" in
+            Geyser-Spigot|SkinsRestorer)
+                tar cf - --exclude='*.jar' --exclude='./cache' --exclude='./cache/*' -C "$d" . | tar xf - -C "$dest/plugins/$name"
+                src_count=$(find "$d" -type f ! -name '*.jar' ! -path "${d%/}/cache/*" | wc -l)
+                ;;
+            *)
+                tar cf - --exclude='*.jar' -C "$d" . | tar xf - -C "$dest/plugins/$name"
+                src_count=$(find "$d" -type f ! -name '*.jar' | wc -l)
+                ;;
+        esac
         dst_count=$(find "$dest/plugins/$name" -type f | wc -l)
         if [ "$src_count" -ne "$dst_count" ]; then
             echo "[backup] ERROR: plugin copy incomplete: $name ($dst_count of $src_count): $dest" >&2
