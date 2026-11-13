@@ -1,7 +1,7 @@
 # AdvancedSlimePaper (ASP) Operations SOP
 
 How to take an ASP server from scratch to production-ready.
-Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-08.
+Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-14.
 
 ## 0. Hard rules
 
@@ -128,7 +128,7 @@ Plugin roles (exact installed versions, paths and hashes live in
 | Plugin | Notes |
 | --- | --- |
 | SWP (ASPaperPlugin) | shipped with the server jar; keep the builds paired |
-| Geyser-Spigot | Bedrock bridge, UDP 19132 |
+| Geyser-Spigot | Bedrock bridge; NetherNet needs signalling before any UDP traffic, see 4.2 |
 | Floodgate | Bedrock accounts joining; used alongside Geyser |
 | ViaVersion / ViaBackwards | cross-version protocol bridge |
 | SkinsRestorer | runs in Floodgate Mode while Floodgate is present |
@@ -274,15 +274,86 @@ Verifier regression tests use isolated temporary fixtures:
 python -B -m unittest discover -s tests -v
 ```
 
+### 4.2 NetherNet Bedrock entry points and troubleshooting
+
+Bedrock 26.60 and newer join over NetherNet, not RakNet: the client first
+fetches the server's connection details over HTTP signalling, then plays
+over WebRTC UDP. UDP 19132 is the data plane only, so it is never the
+address a player types in. Geyser also has to advertise an address the
+player can reach directly, because signalling hands that address to the
+client.
+
+Two signalling arrangements exist:
+
+- `nxs` (default): Geyser registers with an external signalling service
+  (`bedrock.signaling.nxs.endpoint`, default
+  `https://agent.warden.cloud`). Players join the address that service
+  prints at boot, e.g. `Registered with the external signaling service.
+  Players can join at https://<name>.wdn.gg`, on port 443. Geyser opens
+  no local signalling port in this mode.
+- `builtin`: Geyser serves signalling on the Bedrock port over TCP, so
+  that TCP port has to be reachable too (port forward, or a second frpc
+  TCP proxy beside the UDP one). Plain HTTP works but shows a one-time
+  "trust on first use" prompt; HTTPS needs a certificate for a real host
+  name.
+
+`bedrock.signaling.advertise-addresses` must hold the numeric public IP
+and external UDP port that really reaches the NetherNet listener (for
+example `<frp-public-ip>:<udp-port>`), never a host name:
+
+- a host name is resolved on the server at startup, so a fake-IP resolver
+  (common with proxy/VPN DNS modes) turns it into `198.18.0.0/15` and
+  Geyser refuses to start signalling with `Advertised address <ip> is
+  special purpose, no player can reach it`;
+- `advanced.nxs.connection-checks` (on by default) has the service probe
+  the advertised address from several regions, so the value must be the
+  real public endpoint rather than whatever this machine's DNS returned;
+- when a host name is used the boot log prints `Advertised address <name>
+  resolves to <ips>` - the fastest way to see what was actually
+  advertised.
+
+`plugins/Geyser-Spigot/nethernet/` is instance identity, not cache: the
+P-384 machine key, the saved registration/challenge and
+`operator-link.txt` live there (`provider-state/`, `identity.pem`).
+
+- Changing `advertise-addresses` does not re-register anything; the saved
+  identity keeps the same Warden host name. Keep the directory with the
+  server's own data and back it up if that host name matters.
+- A directory that is wiped on every restart registers a new service per
+  boot (new `*.wdn.gg` name) and leaves orphans behind. Set
+  `advanced.nxs.deregister-on-shutdown: true` on container-style hosts.
+- If Geyser holds an identity the service can no longer serve, startup
+  fails with `Could not register with the external signaling service:
+  ... (500 internal_error)` and never self-heals: a saved registration
+  makes Geyser take the recovery path, and only a `recovery_unavailable`
+  answer makes it discard that state and register fresh. Any other error
+  is rethrown on every boot, so changing the advertised address or DNS
+  cannot fix it - the recovery request carries no address.
+  Fix: stop the server, `mv plugins/Geyser-Spigot/nethernet
+  nethernet.bak.<timestamp>`, start again, confirm the
+  `Registered with the external signaling service` line, then hand
+  players the new address.
+
+Diagnostics: `advanced.bedrock.nethernet-debug: true` for request-level
+logs, and `/geyser nethernet status`, `/geyser nethernet diagnostics` or
+`/geyser nethernet advertised` from the console.
+
 ## 5. Acceptance checklist (production gate)
 
 - [ ] Boot log version line matches the target MC version (26.2)
 - [ ] `Done (..s)` present, no ERROR-level log lines
 - [ ] All target plugins `Enabling`
 - [ ] Port 25565 listening (`netstat -ano | findstr 25565`)
-- [ ] Java client can join TCP 25565; Bedrock client can join UDP 19132
-      (Geyser port; a Bedrock client pointed at 25565 fails with no
-      server-side connection record)
+- [ ] Java client can join TCP 25565. A Bedrock client joins the NetherNet
+      entry point, not the UDP port: the `*.wdn.gg:443` address from the
+      `Registered with the external signaling service. Players can join
+      at ...` line, or the built-in signalling TCP port (see 4.2). A
+      client pointed at UDP 19132 or at 25565 fails with no server-side
+      connection record
+- [ ] `bedrock.signaling.advertise-addresses` holds the numeric public IP
+      and external UDP port of the NetherNet listener (never a host name),
+      and the boot log shows enabled signalling plus the registration
+      line above
 - [ ] `stop` exits cleanly; second cold start reaches `Done` quickly
       (no migration/patch phase)
 - [ ] Data dirs are in the backup set: `world/` + whitelist/ban/usercache
@@ -363,6 +434,9 @@ python -B -m unittest discover -s tests -v
   set) before exposing the port.
 - Without ViaVersion, Geyser on 26.2 warns that it targets a newer Java
   protocol (26.3); installing ViaVersion removes the warning.
+- Bedrock players cannot join at all until NetherNet signalling works;
+  see 4.2 for the entry points, the numeric advertise-address rule and
+  the stale `nethernet/` identity failure.
 - The SWP install doc page
   (https://infernalsuite.com/docs/asp/swp/installation) only says
   "download from our Discord" without a link (page defect); the correct
@@ -455,7 +529,7 @@ list at the end).
 | AdvancedSlimePaper | server (MC 26.1+ needs Java 25+) | https://github.com/InfernalSuite/AdvancedSlimePaper | https://infernalsuite.com/download/asp/ | 26.2.build.128-stable @ `817eeca` (2026-09-22, experimental) |
 | SWP (ASPaperPlugin) | slime-world management plugin, released with the server jar | as above | as above | 4.2.0-SNAPSHOT @ `817eeca` (same build as server) |
 | SkinsRestorer | skin restore/change | https://github.com/SkinsRestorer/SkinsRestorer | https://skinsrestorer.net/ | 15.12.6 |
-| Geyser | Bedrock compatibility (UDP 19132) | https://github.com/GeyserMC/Geyser | https://geysermc.org/download/ | 2.12.1-b1302 |
+| Geyser | Bedrock bridge; NetherNet signalling + UDP 19132 data plane (see 4.2) | https://github.com/GeyserMC/Geyser | https://geysermc.org/download/ | 2.12.1-b1302 |
 | Floodgate | Bedrock accounts joining Java servers | https://github.com/GeyserMC/Floodgate | https://geysermc.org/wiki/floodgate/ | 2.2.5-SNAPSHOT (b141) |
 | ViaVersion / ViaBackwards | cross-version protocol bridge | https://github.com/ViaVersion/ViaVersion | https://viaversion.com | 5.12.2-SNAPSHOT |
 

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/commit-discipline.md", "reason": "Verify commit boundary and staging hygiene for the docs change"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Project quality gate expectations that apply to a docs-only task"}
