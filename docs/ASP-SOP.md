@@ -455,7 +455,7 @@ list at the end).
 | AdvancedSlimePaper | server (MC 26.1+ needs Java 25+) | https://github.com/InfernalSuite/AdvancedSlimePaper | https://infernalsuite.com/download/asp/ | 26.2.build.128-stable @ `817eeca` (2026-09-22, experimental) |
 | SWP (ASPaperPlugin) | slime-world management plugin, released with the server jar | as above | as above | 4.2.0-SNAPSHOT @ `817eeca` (same build as server) |
 | SkinsRestorer | skin restore/change | https://github.com/SkinsRestorer/SkinsRestorer | https://skinsrestorer.net/ | 15.12.6 |
-| Geyser | Bedrock compatibility (UDP 19132) | https://github.com/GeyserMC/Geyser | https://geysermc.org/download/ | 2.12.0-b1259 |
+| Geyser | Bedrock compatibility (UDP 19132) | https://github.com/GeyserMC/Geyser | https://geysermc.org/download/ | 2.12.1-b1302 |
 | Floodgate | Bedrock accounts joining Java servers | https://github.com/GeyserMC/Floodgate | https://geysermc.org/wiki/floodgate/ | 2.2.5-SNAPSHOT (b141) |
 | ViaVersion / ViaBackwards | cross-version protocol bridge | https://github.com/ViaVersion/ViaVersion | https://viaversion.com | 5.12.2-SNAPSHOT |
 

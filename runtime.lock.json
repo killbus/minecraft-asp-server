@@ -46,10 +46,10 @@
       "id": "geyser-spigot",
       "kind": "plugin",
       "path": "plugins/Geyser-Spigot.jar",
-      "version": "2.12.0-SNAPSHOT",
-      "build": "b1259-0e94972f1cdf08f2a4f24974ff3e94f112d9d60a",
+      "version": "2.12.1-SNAPSHOT",
+      "build": "b1302-cbd42b8a0c47cef046b408411508c67f82cd8e3c",
       "source": "https://geysermc.org/download/",
-      "sha256": "79ec9a7e6aba1ff0d401c0c3f052297c9c339b3958bacb3537c5a725be60c172"
+      "sha256": "e13592d8ef907657eb9bae6f778dcb6ccb7f4a5b4641baeeb298ff5d13ccc92f"
     },
     {
       "id": "grimac",
