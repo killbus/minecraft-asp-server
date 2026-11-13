@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 1
-- **Last Active**: 2026-11-13
+- **Total Sessions**: 2
+- **Last Active**: 2026-11-14
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~30 | Active |
+| `journal-1.md` | ~69 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 2 | 2026-11-14 | NetherNet/Terracotta root cause and SOP 4.2 | `fda2c49` | `main` |
 | 1 | 2026-11-13 | Optional frpc tmux helper | `ff9f677`, `5af0a8f` | `main` |
 <!-- @@@/auto:session-history -->
 
