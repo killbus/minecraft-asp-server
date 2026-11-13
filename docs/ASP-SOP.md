@@ -463,3 +463,31 @@ Deprecated sources (do not cite):
 - https://docs.geysermc.org/ (404; current docs live under https://geysermc.org/wiki/)
 - https://api.geysermc.org/v1 and https://download.geysermc.org/v1 (Not Found; v2 works)
 - GeyserMC repos have no GitHub Releases/tags; artifacts come from download.geysermc.org/v2
+
+## 10. Optional frpc session script (not core)
+
+`scripts/scenes/frpc.sh` is an optional Linux composition script for running
+the server console and several `frpc` tunnels in one tmux session. It is not
+part of the deployment path and is outside the section 5 acceptance
+checklist. The core `start.*`, `backup.*` and runtime verification scripts
+neither call nor depend on it; deleting the script leaves them unchanged.
+
+The verbs are `up`, `down`, `status`, `attach` and `help`.
+
+It requires `tmux` and `frpc` on PATH. The script does not read or copy frp
+configuration files: pass each file, or a directory of files, with `--config`.
+Directory inputs expand to that directory's immediate non-hidden regular files
+in name order.
+
+```
+scripts/scenes/frpc.sh up --config ~/frp --no-attach
+scripts/scenes/frpc.sh status
+scripts/scenes/frpc.sh down
+```
+
+`up` creates the `asp-frpc` session with a `server` window and one
+`frpc-<name>` window per config. `remain-on-exit` keeps a failed sidecar's pane
+visible; restart it explicitly with `down` followed by `up`. `down` sends
+`stop` to the server console and waits up to `FRPC_STOP_TIMEOUT` seconds
+(default 180) before removing the session. Use `--dry-run` to print the tmux
+commands without starting anything.

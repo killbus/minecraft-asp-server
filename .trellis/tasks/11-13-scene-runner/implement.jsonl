@@ -1,0 +1,5 @@
+{"file": ".trellis/tasks/11-13-scene-runner/prd.md", "reason": "requirements, CLI contract, and acceptance criteria"}
+{"file": ".trellis/tasks/11-13-scene-runner/design.md", "reason": "shape, input resolution rules, failure isolation, rejected alternatives"}
+{"file": ".trellis/tasks/11-13-scene-runner/implement.md", "reason": "ordered steps and the validation commands to run"}
+{"file": "docs/ASP-SOP.md", "reason": "document conventions; the file whose appendix is edited"}
+{"file": ".trellis/spec/guides/commit-discipline.md", "reason": "commit boundary rules for the follow-up commit"}
