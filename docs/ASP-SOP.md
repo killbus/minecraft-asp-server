@@ -911,3 +911,104 @@ arrives means the server was never in question. It refuses to start while
 the scene holds the listen port, and its judgement is covered by
 `tests/test_plain_website_check.py`, which runs the whole check against a
 stand-in proxy and a stand-in tunnel instead of haproxy and frpc.
+
+### 10.2 Keeping the certificate for the shared port current (Linux only)
+
+The `--tls-cert` file of 10.1 is the one input of that arrangement no ACME
+client can produce: the name is bound to a NATFRP tunnel and its DNS belongs
+to the provider, so no DNS-01 challenge can be answered for it. The provider
+issues the certificate itself and hands the pair to the account holder
+through its API, and its documentation asks for the written files to be
+updated when the certificate is renewed, so taking it from the API is the
+documented arrangement rather than a workaround.
+
+`scripts/sync_natfrp_cert.py` does that and nothing else: standard library
+only, one run per invocation, no daemon. It is not core content in the sense
+of 10 - `start.*`, `backup.*` and the verifier do not call it - and the PEM
+it writes holds a private key, so it lives with the frpc configuration
+outside the repository, outside section 1's backup classes and section 5's
+acceptance checklist.
+
+```sh
+NATFRP_TOKEN=... python3 scripts/sync_natfrp_cert.py \
+    --domain <sub>.<account>.nyat.app \
+    --out ~/asp-frpcs/tls/<sub>.<account>.nyat.app.pem \
+    --reload-command 'sh scripts/scenes/frpc-shared-tcp.sh reload'
+```
+
+`--out` names one file and nothing negotiates it: the only rule is that the
+scene's `--tls-cert` has to point at that same path. Name it for the fully
+qualified name (10.1) - the script notes it when the name is a bare
+subdomain, because with several accounts in one directory that is where a
+certificate and a tunnel get paired wrongly.
+
+The API key is an account credential and never a command line argument
+(every process on the host can read those), so the script takes it from
+`NATFRP_TOKEN` or from a file named by `--token-file`.
+
+One thing that looks like a bad key and is not: the provider's edge answers
+HTTP 403 with the body `error code: 1010` to client signatures it dislikes -
+Python's `urllib` default among them - before the request reaches the API.
+The script therefore names its own `User-Agent`, and the two answers are
+told apart by the body: the API answers JSON carrying a `code` and a `msg`
+(a rejected key is HTTP 500 with code 401), while the edge answers one short
+line of text. What the edge holds is a list of banned signatures rather than
+a browsers-only rule - `curl`, `python-requests` and a made-up name all get
+through - so the honest name is enough, and a browser's would be an
+impersonation that also chases the browser's version numbers.
+
+One run does this, in order:
+
+1. `GET /domain/get` for the account's domain records and certificate
+   state. A `--domain` that is not one of that account's records is refused
+   before anything else, because the API answers for the account and not for
+   the name: a key and a name from different accounts would otherwise be
+   paired silently.
+2. When the certificate expires inside `--renew-window-days` (default 7),
+   ask for a renewal (`POST /domain/cert`) and poll until the account holds
+   a certificate that is not the old one. The API accepts a renewal request
+   only inside that window, and it keeps the old certificate until the new
+   one is issued.
+3. Download the pair (`GET /domain/cert`) - but only when the file does not
+   already hold this certificate, because the API asks callers not to
+   download it repeatedly. A `.created` sidecar next to the PEM records
+   which certificate the file holds.
+4. Prove the certificate and the key belong together
+   (`ssl.load_cert_chain`, the check HAProxy would otherwise make much later
+   and much less visibly) and, when openssl is installed, that the leaf
+   covers `--domain`.
+5. Write the chain and the key into one combined PEM, the form a single
+   `bind ... ssl crt` line reads, through a temporary file and a rename, so
+   a reader never sees half a file, and with no group or other access,
+   because the file holds a private key and the umask must not decide that.
+6. Run `--reload-command`, and only when the file changed.
+
+The reload command is the one in the example, because the scene already owns
+the arrangement it needs: the mux runs in master-worker mode with a pidfile,
+so `reload` swaps the certificate under a running server by signalling the
+master, and nothing on the shared port drops (10.1). An operator who passes
+their own `--haproxy-config` and runs HAProxy some other way writes the
+command themselves; if that HAProxy is a master with a pidfile of its own,
+`kill -USR2` on it is the equivalent, and `haproxy -sf` on a pidfile is the
+older form of the same handover.
+
+Exit codes: `0` the file is current or was updated, `1` the API, the
+certificate or a command failed, `2` usage. `--dry-run` reports and
+downloads, and writes nothing.
+
+Two provider-side facts shape how this has to be run. The first certificate
+for a name is issued when frpc first fetches it with `auto_https` on, so an
+account that never turned that on is told there is no certificate yet and
+needs one throwaway `auto_https` run first. And the provider renews a
+certificate automatically only while it counts as active, which its
+documentation defines as loaded through `auto_https` within the last five
+days - exactly what keeping `auto_https` off for the mux gives up. The
+explicit renewal in step 2 is what replaces that, so scheduling this script
+(cron, a systemd timer, the operator's choice) is not optional decoration.
+
+The `<name>.crt` and `<name>.key` files frpc writes into its working
+directory are self-signed stand-ins it generates at startup; the certificate
+on the wire, and the pair the API returns, is the issuer's. None of this
+disturbs the `--config` directory rule of 10: it takes only `.ini`, `.toml`,
+`.yaml` and `.yml`, and `~/asp-frpcs/tls/` is a subdirectory it never looks
+into.
