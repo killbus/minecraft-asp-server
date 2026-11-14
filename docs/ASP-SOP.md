@@ -807,3 +807,24 @@ port Java depends on what the provider's auto-detect mode does with
 non-HTTP bytes. Measure that with the probe instead of assuming it; if the
 answer is that they are dropped, give Java its own tunnel and remote port
 and let this port serve signalling only.
+
+To separate "the provider and the tunnel carry this port" from "the server
+answers on it", the same port can be served by a throwaway website instead:
+
+```sh
+tmux new -d -s plain-frpc 'frpc -c ~/asp-frpcs/frpc.toml'   # tunnel only
+python3 scripts/plain_website_check.py --host <name> --port <remote-port>
+tmux kill-session -t plain-frpc
+```
+
+That check starts a throwaway directory plus a very ordinary HTTP reverse
+proxy configuration on the port the tunnel forwards to (`--listen`,
+default `127.0.0.1:25566`), proves locally that the proxy and the site
+work, and then asks the public name for the same random page - over plain
+HTTP, over TLS, and once more with certificate verification. A page that
+arrives through the public name with no Geyser, no Paper and no mux in the
+path means anything still broken is in the server; a page that never
+arrives means the server was never in question. It refuses to start while
+the scene holds the listen port, and its judgement is covered by
+`tests/test_plain_website_check.py`, which runs the whole check against a
+stand-in proxy and a stand-in tunnel instead of haproxy and frpc.
