@@ -281,6 +281,10 @@ Verifier regression tests use isolated temporary fixtures:
 python -B -m unittest discover -s tests -v
 ```
 
+`tests/test_frpc_shared_tcp_scene.py` covers the configuration the optional
+shared-TCP scene generates (section 10.1); it only runs `--dry-run`, so it
+needs POSIX `sh` and nothing else.
+
 ### 4.2 NetherNet Bedrock entry points and troubleshooting
 
 Bedrock 26.60 and newer join over NetherNet, not RakNet: the client first
@@ -302,8 +306,9 @@ Two signalling arrangements exist:
   that TCP port has to be reachable too (port forward, or a second frpc
   TCP proxy beside the UDP one). Plain HTTP works but shows a one-time
   "trust on first use" prompt; HTTPS needs a certificate for a real host
-  name. When only one public TCP port is available, 10.1 shares it
-  between Java and this signalling listener with HAProxy.
+  name, either in Geyser or terminated in front of it by HAProxy. When
+  only one public TCP port is available, 10.1 shares it between Java and
+  this signalling listener with HAProxy.
 
 `bedrock.signaling.advertise-addresses` must hold the numeric public IP
 and external UDP port that really reaches the NetherNet listener (for
@@ -624,14 +629,58 @@ unstarted.
 | `127.0.0.1:25566` (mux, default) | public TCP entry, demultiplexed |
 | `127.0.0.1:25565` | Java server (default backend) |
 | `127.0.0.1:19132` | Geyser NetherNet TCP signalling |
+| `127.0.0.1:25567` (TLS, default) | TLS termination for the ClientHello, only with `--tls-cert` |
 
 Classification: a TLS ClientHello (`req.ssl_hello_type 1`) or an HTTP
 method / HTTP/2 preface goes to Geyser; a Java legacy ping (`0xFE`) or a
 handshake packet (`0x00` at offset 1) goes to Java; anything still
-unclassified after `inspect-delay 3s` falls through to Java. HAProxy
-does not terminate TLS - the certificate stays in Geyser
-(`bedrock.signaling.builtin.https.*`), so `--listen` is a transparent
-byte pipe.
+unclassified after `inspect-delay 3s` falls through to Java.
+
+Without `--tls-cert` the mux is a transparent byte pipe: the ClientHello
+is forwarded untouched, so a certificate has to live in Geyser
+(`bedrock.signaling.builtin.https.*`). With `--tls-cert FILE` the scene
+terminates TLS instead: the ClientHello is handed to a second loopback
+bind (`--tls-listen`, default `127.0.0.1:25567`) that decrypts it and
+passes the plain bytes to the same signalling backend. Geyser then keeps
+its plain HTTP listener (`signaling.mode: builtin`, no certificate
+configured), and plain HTTP arriving on the shared port still goes
+straight to Geyser. Geyser can answer such a plaintext client with
+`426 Upgrade Required` (`Upgrade: TLS/1.2`) so that TLS starts on the
+same connection, and an in-place upgrade like that happens inside the
+connection the mux already classified - it cannot be redirected to the
+terminating bind. Give players the host name, never the raw IP, so the
+client starts with TLS.
+
+`--tls-cert` takes one combined PEM, because that is what one HAProxy
+`bind ... ssl crt` line reads, and it lives outside the repository next
+to the frpc configs:
+
+```sh
+cat fullchain.pem privkey.pem > ~/asp-frpcs/tls/<name>.pem
+sh scripts/scenes/frpc-shared-tcp.sh up --config ~/asp-frpcs \
+    --tls-cert ~/asp-frpcs/tls/<name>.pem --no-attach
+```
+
+The certificate is not core content and never enters Git: it belongs with
+the frpc configuration outside the repository, which is also outside
+section 1's backup classes and section 5's acceptance checklist. The
+scene refuses a file that holds no certificate or no private key, refuses
+`--tls-cert` together with `--haproxy-config` (which owns the whole
+configuration), and refuses a `--tls-listen` that collides with
+`--listen`, `--java` or `--bedrock`. None of this needs anything special
+from frpc: keep `type = "tcp"` and leave NATFRP's `auto_https` off, since
+frpc terminating TLS would reverse-proxy the whole stream and Java cannot
+speak that. `transport.tls.enable` only wraps the frpc-to-frps transport
+and is unrelated.
+
+Two things HAProxy cannot fix. An frps node that whitelists SNI or Host
+against domains bound to the tunnel rejects an unknown name before the
+bytes reach this machine, so the host name still has to be set up on the
+provider side (the datacenter's "domain not whitelisted" interception page
+is that check, not a fault in the mux). And the client has to type the
+host name the certificate covers - a raw public IP cannot have a public
+certificate, so the mobile clients that refuse plain HTTP still fail
+against one.
 
 Prerequisites: `tmux`, `frpc` and `haproxy` on PATH
 (`HAPROXY=/path/to/haproxy` and `FRPC=/path/to/frpc` override the
@@ -676,24 +725,40 @@ does not register with the external service (no `*.wdn.gg` name);
 `hybrid` serves that listener and still registers with the external
 service, so the `*.wdn.gg:443` address stays available as a fallback.
 `nxs` (the default) leaves the `geyser_signaling` backend with nothing
-to talk to. Because HAProxy does not terminate TLS, signalling is only
-HTTPS when Geyser presents a certificate valid for the name the player
-typed; a raw public IP cannot have a public certificate, so the mobile
-clients that refuse plain HTTP can still fail - `hybrid`/`nxs` or a real
-host name over this port are the ways around that.
+to talk to. Signalling is only HTTPS when the certificate presented to
+the player is valid for the name the player typed, whichever side
+terminates TLS - Geyser (`bedrock.signaling.builtin.https.*`) without
+`--tls-cert`, HAProxy with it.
 
-Two deliberate limits. HAProxy forwards raw bytes, so leave frpc's
-`transport.proxyProtocolVersion` unset: the scene does not speak PROXY
-protocol and the backends must not be configured to expect it. And it
-shares TCP only; the WebRTC media plane is UDP and still needs its own
-frpc proxy.
+Two deliberate limits. HAProxy relays without speaking PROXY protocol, so
+leave frpc's `transport.proxyProtocolVersion` unset and do not configure
+the backends to expect it. And it shares TCP only; the WebRTC media plane
+is UDP and still needs its own frpc proxy.
 
 `--dry-run` prints the HAProxy configuration and the tmux commands
 without starting tmux, frpc or HAProxy. `--listen`, `--java` and
-`--bedrock` override the three local endpoints. `--haproxy-config FILE`
-substitutes a hand-written configuration, which is checked with
-`haproxy -c -f` before anything starts and is never rewritten. Without
-it the scene creates `.tmp/frpc-shared-tcp/` as needed and atomically
-rewrites `.tmp/frpc-shared-tcp/haproxy.cfg` (gitignored) on every `up`.
-`up` refuses to run while `asp-frpc-shared` already exists; use `down`
-first.
+`--bedrock` override the three local endpoints; `--tls-cert` and
+`--tls-listen` switch on the terminating variant described above.
+`--haproxy-config FILE` substitutes a hand-written configuration, which is
+checked with `haproxy -c -f` before anything starts and is never
+rewritten. Without it the scene creates `.tmp/frpc-shared-tcp/` as needed
+and atomically rewrites `.tmp/frpc-shared-tcp/haproxy.cfg` (gitignored) on
+every `up`. `up` refuses to run while `asp-frpc-shared` already exists;
+use `down` first.
+
+Everything above can be checked on the host without touching NATFRP,
+tmux or frpc:
+
+```sh
+python3 tests/smoke_frpc_shared_tcp_tls.py
+```
+
+This needs `sh`, `haproxy` and `openssl`. It generates a throwaway
+certificate, starts two loopback backends, builds the HAProxy
+configuration through the scene's own `--dry-run`, validates it with
+`haproxy -c -f`, and then checks on the real proxy that the certificate is
+presented, that a TLS ClientHello on the shared port reaches the
+signalling backend, that plain HTTP on the shared port still reaches it,
+and that Java bytes reach the Java backend. It exits 0 only when all four
+checks pass. What it cannot cover is the path beyond this machine: the
+frps tunnel, an frps node's SNI/Host whitelist and a real Bedrock client.
