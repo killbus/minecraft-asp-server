@@ -641,6 +641,21 @@ unstarted. The sidecar windows inherit the working directory rule of 10:
 each frpc runs in the directory of its own configuration, while HAProxy and
 the server run from the repository root.
 
+Its verbs are `up`, `reload`, `down`, `status`, `attach` and `help`. The mux
+runs HAProxy in master-worker mode (`-W -db`) with a pidfile
+(`.tmp/frpc-shared-tcp/haproxy.pid`; `MUX_PIDFILE` overrides it), and
+`reload` is what that arrangement is for: it sends `SIGUSR2` to the master,
+which re-reads the configuration and hands the listening socket to a new
+worker, so the port never drops and the players on it are not disconnected.
+Respawning the mux window would do the opposite, which is why the reload is
+a signal and not a restart. `reload` reads the first line of the pidfile,
+checks that the process it names is HAProxy rather than trusting the file,
+and refuses anything else: a stale pidfile plus a recycled pid would
+otherwise aim `SIGUSR2` at an unrelated process. `down` removes the pidfile
+with the session. Since that check compares the running process name with
+the name of the `HAPROXY` binary, a `reload` has to see the same `HAPROXY`
+value the mux was started with.
+
 | Local endpoint | Role |
 | --- | --- |
 | `127.0.0.1:25566` (mux, default) | public TCP entry, demultiplexed |
@@ -668,16 +683,50 @@ connection the mux already classified - it cannot be redirected to the
 terminating bind. Give players the host name, never the raw IP, so the
 client starts with TLS.
 
-`--tls-cert` takes one combined PEM, because that is what one HAProxy
-`bind ... ssl crt` line reads, and it lives outside the repository next
-to the frpc configs:
+`--tls-cert` may be given more than once, one file per name: every file
+becomes its own `crt` on that bind, in the order given, and HAProxy chooses
+between them by the SNI the ClientHello carries. That is what serving
+several names on one port needs - several accounts, each with the
+certificate its own provider issued (10.2) - and it is why the tunnels of
+two accounts can share this mux while each one's players still get the
+right certificate. A ClientHello no certificate covers is served the first
+one, so a name added later has to bring its certificate with it;
+`--strict-sni` refuses such a handshake instead, which turns a wrong
+certificate into a visible failure rather than a mobile client's confusing
+complaint. Java carries no SNI at all, so none of this changes how Java is
+routed. The cost is that every private key on that bind is held by the one
+HAProxy process, which is what SNI selection is.
+
+Each `--tls-cert` takes one combined PEM, because that is what one HAProxy
+`bind ... ssl crt` line reads, and they live outside the repository next
+to the frpc configs. One file per fully qualified name, never a bare
+subdomain: `~/asp-frpcs/tls/` is a shared directory, and with more than one
+account in it `1-mc.pem` no longer says whose `1-mc` it is. Name it for the
+name the certificate covers, so the file and the certificate identify each
+other:
 
 ```sh
 mkdir -p ~/asp-frpcs/tls
-cat fullchain.pem privkey.pem > ~/asp-frpcs/tls/<name>.pem
+cat fullchain.pem privkey.pem > ~/asp-frpcs/tls/<fqdn>.pem
 sh scripts/scenes/frpc-shared-tcp.sh up --config ~/asp-frpcs \
-    --tls-cert ~/asp-frpcs/tls/<name>.pem --no-attach
+    --tls-cert ~/asp-frpcs/tls/<fqdn>.pem --no-attach
 ```
+
+Two accounts are then two files on one bind - and two sync runs, because
+one token answers for its own account only:
+
+```sh
+sh scripts/scenes/frpc-shared-tcp.sh up --config ~/asp-frpcs --no-attach \
+    --tls-cert ~/asp-frpcs/tls/<sub>.<account>.nyat.app.pem \
+    --tls-cert ~/asp-frpcs/tls/<sub>.<other-account>.nyat.app.pem \
+    --strict-sni
+```
+
+Repeating `--tls-cert` is not a way to route by account: the mux sees only
+the bytes on its own loopback port, and nothing in them says which tunnel a
+connection arrived through. Two accounts that have to reach two servers
+need one mux per local port, or PROXY protocol, which this scene does not
+parse.
 
 `fullchain.pem` / `privkey.pem` are the issuer's file names, not something
 the scene produces: the PEM has to come from a certificate authority for a
@@ -685,9 +734,13 @@ name you control. A tunneled port cannot answer HTTP-01 (the node owns the
 port and it carries Java as well), so issue over DNS-01:
 
 ```sh
-acme.sh --issue --dns dns_<provider> -d <name> --keylength ec-256
-cat <fullchain.cer> <name>.key > ~/asp-frpcs/tls/<name>.pem
+acme.sh --issue --dns dns_<provider> -d <fqdn> --keylength ec-256
+cat <fullchain.cer> <fqdn>.key > ~/asp-frpcs/tls/<fqdn>.pem
 ```
+
+A name bound to the provider is the exception to that route: its DNS belongs
+to the provider, so no challenge can be answered for it and the certificate
+comes from the provider's own API instead (10.2).
 
 Two provider-side prerequisites come with that. The name has to reach the
 node the tunnel lands on (an A record to the node IP, or a CNAME to the

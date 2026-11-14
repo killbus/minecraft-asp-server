@@ -145,6 +145,61 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertIn("    server geyser 127.0.0.1:19133", config)
         self.assertIn("    server paper 127.0.0.1:25570", config)
 
+    def terminating_bind(self, config):
+        """The one bind that terminates TLS, and nothing else."""
+        listener = [line for line in config if line.startswith("    bind ") and " ssl " in line]
+        self.assertEqual(1, len(listener), config)
+        return listener[0]
+
+    def test_two_certificates_share_the_terminating_bind(self):
+        """SNI picks between them, so several names can share one port."""
+        first = self.pem("certs/aaa.nyat.app.pem")
+        second = self.pem("certs/bbb.nyat.app.pem")
+
+        config = self.config(
+            "--tls-cert", first.as_posix(), "--tls-cert", second.as_posix(),
+        )
+
+        listener = self.terminating_bind(config)
+        self.assertEqual(2, listener.count(" crt "), listener)
+        self.assertLess(listener.index("aaa.nyat.app.pem"), listener.index("bbb.nyat.app.pem"),
+                        "the order the operator gave is kept")
+        self.assertIn("    # 2 names on one bind: HAProxy chooses the certificate by", config)
+        self.assertNotIn("strict-sni", listener)
+
+    def test_strict_sni_reaches_the_terminating_bind(self):
+        certificate = self.pem("certs/site.pem")
+
+        listener = self.terminating_bind(
+            self.config("--tls-cert", certificate.as_posix(), "--strict-sni")
+        )
+
+        self.assertTrue(listener.endswith(" strict-sni"), listener)
+
+    def test_strict_sni_without_a_certificate_is_rejected(self):
+        errors = self.assert_rejected("--strict-sni")
+
+        self.assertIn("--tls-cert", errors)
+
+    def test_a_second_certificate_is_checked_like_the_first(self):
+        good = self.pem("certs/good.pem")
+        cert_only = self.pem("certs/cert-only.pem", CERT_ONLY_PEM)
+
+        errors = self.assert_rejected(
+            "--tls-cert", good.as_posix(), "--tls-cert", cert_only.as_posix(),
+        )
+
+        self.assertIn("private key", errors)
+
+    def test_the_same_certificate_twice_is_rejected(self):
+        certificate = self.pem("certs/site.pem")
+
+        errors = self.assert_rejected(
+            "--tls-cert", certificate.as_posix(), "--tls-cert", certificate.as_posix(),
+        )
+
+        self.assertIn("the same TLS certificate twice", errors)
+
     def test_certificate_path_with_spaces_is_quoted(self):
         certificate = self.pem("certs/with space.pem")
         config = self.config("--tls-cert", certificate.as_posix())
