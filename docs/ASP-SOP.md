@@ -673,10 +673,29 @@ client starts with TLS.
 to the frpc configs:
 
 ```sh
+mkdir -p ~/asp-frpcs/tls
 cat fullchain.pem privkey.pem > ~/asp-frpcs/tls/<name>.pem
 sh scripts/scenes/frpc-shared-tcp.sh up --config ~/asp-frpcs \
     --tls-cert ~/asp-frpcs/tls/<name>.pem --no-attach
 ```
+
+`fullchain.pem` / `privkey.pem` are the issuer's file names, not something
+the scene produces: the PEM has to come from a certificate authority for a
+name you control. A tunneled port cannot answer HTTP-01 (the node owns the
+port and it carries Java as well), so issue over DNS-01:
+
+```sh
+acme.sh --issue --dns dns_<provider> -d <name> --keylength ec-256
+cat <fullchain.cer> <name>.key > ~/asp-frpcs/tls/<name>.pem
+```
+
+Two provider-side prerequisites come with that. The name has to reach the
+node the tunnel lands on (an A record to the node IP, or a CNAME to the
+node's domain), and the node has to accept that name for this tunnel -
+NATFRP binds a domain to a tunnel and verifies the binding first. Without a
+domain, keep signalling on the external service (`nxs`, or `hybrid` to
+serve both) and hand players the `*.wdn.gg:443` address; players then need
+the address that service printed, not this port.
 
 The certificate is not core content and never enters Git: it belongs with
 the frpc configuration outside the repository, which is also outside
@@ -819,15 +838,58 @@ answer, a `198.18.0.0/15` address as a resolver artefact, the exit codes -
 does not need a live node and is covered against loopback fakes by
 `tests/test_probe_public_entry.py`.
 
-One topology the mux cannot decide by itself: when the provider terminates
-TLS instead - NATFRP's `auto_https` with a certificate for the bound domain -
-our `--tls-cert` becomes redundant (two TLS layers), the port reaches the
-mux as plain HTTP, and a bound domain is also what lifts the datacenter's
-HTTP interception in the first place. Java is still not HTTP, so on that
-port Java depends on what the provider's auto-detect mode does with
-non-HTTP bytes. Measure that with the probe instead of assuming it; if the
-answer is that they are dropped, give Java its own tunnel and remote port
-and let this port serve signalling only.
+One topology the mux cannot decide by itself: NATFRP's `auto_https` terminates
+TLS in frpc, not in the node and not in the datacenter in front of it. frpc
+accepts the TLS connection, removes the TLS layer and hands the bytes inside
+it to the local service; the mode decides how. The default probes the local
+service at startup and picks a mode, `http` is an HTTP reverse proxy that
+adds `X-Forwarded-For`, `https` reverses to an HTTPS local service, and
+`passthrough` forwards the bytes inside TLS untouched - which is for a
+non-HTTP protocol whose client wraps it in TLS itself, not for a client that
+speaks no TLS at all. A Java client speaks no TLS, so on an `auto_https` port
+Java never completes a handshake and is gone before the mux sees a byte. The
+provider's documentation puts game traffic under what must not use the
+feature, and its NetherNet recipe turns it on for the signalling tunnel only
+(`localPort` at Geyser's 19132, mode `http`, the panel's reverse-proxy-to-HTTP
+option) while the UDP media tunnel stays without it. Certificate
+provenance follows the same setting: `auto` self-signs unless a subdomain
+binding exists, in which case frpc loads that domain's certificate from the
+server, and a comma-separated domain list makes frpc read `<domain>.crt` and
+`<domain>.key` from its working directory - the per-config working directory
+in 10 is what puts those files next to the configuration. For a bound name
+like `<sub>.<account>.nyat.app` that loaded certificate is also the only
+practical one, because the name's DNS belongs to the provider and DNS-01
+cannot be run for it.
+
+The tunnel is a byte stream in every one of these arrangements: `type = "tcp"`
+relays at the transport layer on both hops, and `auto_https` only moves a TLS
+session into the frpc process. That is what makes `http` and `https` modes
+application-layer reverse proxying - they are why frpc can add
+`X-Forwarded-For`, rewrite `Host` or answer with its own error page - while
+`passthrough` strips the TLS layer and keeps no application-layer semantics.
+The mux is the other kind of element: `mode tcp` with ACLs over the first
+packets, so a ClientHello, an HTTP method prefix and a Java handshake are
+classified at the transport layer and no application protocol is parsed.
+A Java client has no TLS layer for anything to strip, which is the whole
+reason it cannot share a port with a TLS-terminating frpc.
+
+A shared port therefore has to be one of two things. With `auto_https` on,
+the mux sees plain HTTP, the `is_http` branch is the signalling path and
+`--tls-cert` is redundant - but Java on that port is dead and needs its own
+tunnel and remote port. With `auto_https` off, the ClientHello reaches
+`is_tls` and either `--tls-cert` terminates it here or Geyser holds the
+certificate itself, and that certificate has to be for a name you control,
+which a provider-bound name is not. Measure which arrangement you have with
+the probe instead of assuming it.
+
+Keeping `auto_https` on for the provider's certificate and pointing the tunnel
+at the mux anyway is possible - `passthrough` only changes the shape of what
+comes out of the TLS layer, it does not move the termination - but it buys
+nothing. The ClientHello is gone by the time the mux sees the connection,
+`is_tls` never matches, `--tls-cert` becomes dead configuration, and Java is
+excluded exactly as above, so the mux is left serving one branch that a plain
+TCP tunnel to 19132 would serve without it. The extra process is worth its
+place only in the second arrangement, the one that owns the certificate.
 
 To separate "the provider and the tunnel carry this port" from "the server
 answers on it", the same port can be served by a throwaway website instead:
