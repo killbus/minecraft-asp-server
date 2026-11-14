@@ -189,7 +189,7 @@ def check_haproxy_config(haproxy, config):
         print("FAIL: haproxy rejected the generated configuration")
         print((result.stdout + result.stderr).strip())
         sys.exit(1)
-    return result.stdout.strip()
+    return (result.stdout + result.stderr).strip() or "configuration is valid (no output)"
 
 
 def http_over_tls(port, certificate):
@@ -229,17 +229,29 @@ def java_legacy_ping(port):
         return plain.recv(64)
 
 
-def check_certificate(openssl, port, certificate):
-    result = subprocess.run(
-        [
-            openssl, "s_client", "-connect", f"127.0.0.1:{port}",
-            "-servername", CERT_NAME, "-CAfile", str(certificate),
-            "-verify_return_error",
-        ],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True,
-    )
-    output = result.stdout + result.stderr
-    return result.returncode == 0 and f"subject=CN = {CERT_NAME}" in output
+def certificate_covers_name(presented):
+    """True when the certificate names the host we asked for."""
+    common_names = [
+        value for entry in presented.get("subject", ()) for key, value in entry
+        if key == "commonName"
+    ]
+    alt_names = [value for key, value in presented.get("subjectAltName", ()) if key == "DNS"]
+    return CERT_NAME in common_names and (not alt_names or CERT_NAME in alt_names)
+
+
+def check_certificate(port, certificate):
+    """The terminating bind itself has to serve a certificate for the SNI.
+
+    Verifying the handshake against the throwaway certificate covers the
+    chain and the host name; the subject is asserted explicitly because
+    `openssl s_client` is no good here - it exits non-zero when the peer
+    closes without a close_notify.
+    """
+    context = ssl.create_default_context(cafile=str(certificate))
+    with socket.create_connection(("127.0.0.1", port), 5) as raw:
+        with context.wrap_socket(raw, server_hostname=CERT_NAME) as tls:
+            presented = tls.getpeercert()
+    return certificate_covers_name(presented)
 
 
 def check_tls_mux(port, certificate):
@@ -299,7 +311,7 @@ def main(argv):
             return 1
 
         checks = [
-            ("certificate over TLS", lambda: check_certificate(openssl, ports["tls"], certificate)),
+            ("certificate on the terminating bind", lambda: check_certificate(ports["tls"], certificate)),
             (
                 "TLS on the shared port reaches the signalling backend",
                 lambda: check_tls_mux(ports["listen"], certificate),
@@ -323,7 +335,11 @@ def main(argv):
             print(f"{'ok  ' if passed else 'FAIL'} {name}")
             failures += 0 if passed else 1
 
-        print(f"java connections: {java_server.connections}, signalling connections: {geyser_server.connections}")
+        print(
+            f"backend connections: java={java_server.connections}, "
+            f"signalling={geyser_server.connections} "
+            "(the readiness probe counts too: it stays unclassified until inspect-delay expires)"
+        )
         if failures:
             print(f"FAILED: {failures} check(s)")
             print((directory / "haproxy.log").read_text(errors="replace"))
