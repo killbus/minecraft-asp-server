@@ -29,6 +29,13 @@
 #  alive for FRPC_READY_TIMEOUT seconds. --defer-server leaves it as a
 #  placeholder so a composing scene can start other prerequisites first.
 #
+#  Every pane gets a UTF-8 locale, whatever the caller's is: the server
+#  console is UTF-8 and the server transcodes it to the locale it starts
+#  with. The script's own LC_ALL=C stays, for deterministic globbing and
+#  case matching, and every tmux call it makes runs in the pane locale,
+#  which is also what decides how tmux renders and captures multibyte
+#  text. FRPC_PANEL_LOCALE overrides the choice.
+#
 #  Requires: POSIX sh, tmux, frpc. --dry-run does not need tmux.
 # ============================================================
 set -eu
@@ -38,8 +45,39 @@ STOP_TIMEOUT=${FRPC_STOP_TIMEOUT:-180}
 READY_TIMEOUT=${FRPC_READY_TIMEOUT:-5}
 FRPC=${FRPC:-frpc}
 
+# Captured before the C locale below, which belongs to this script alone.
+_caller_locale=${LC_ALL-}
+
 LC_ALL=C
 export LC_ALL
+
+# The panes must not inherit that C locale. The server console is UTF-8 and
+# the server transcodes it to the locale it starts with, so a C pane puts
+# question marks or mojibake where the console had Chinese. The caller's own
+# UTF-8 locale is preferred, then C.UTF-8, which glibc carries itself;
+# FRPC_PANEL_LOCALE overrides both.
+PANEL_LOCALE=${FRPC_PANEL_LOCALE:-}
+if [ -z "$PANEL_LOCALE" ]; then
+    for _panel_candidate in "$_caller_locale" "${LANG:-}" C.UTF-8; do
+        case "$_panel_candidate" in
+            *[Uu][Tt][Ff]-8|*[Uu][Tt][Ff]8)
+                PANEL_LOCALE=$_panel_candidate
+                break
+                ;;
+        esac
+    done
+fi
+
+# The tmux binary, resolved before the wrapper below hides the name from
+# `command -v`.
+TMUX_BIN=$(command -v tmux 2>/dev/null || true)
+
+# Every tmux call runs in the panel locale: the client's own locale is what
+# decides how tmux renders and captures multibyte text, and what a pane it
+# starts inherits.
+tmux() {
+    LC_ALL=$PANEL_LOCALE "$TMUX_BIN" "$@"
+}
 
 SESSION=${FRPC_SESSION:-asp-frpc}
 case "$SESSION" in
@@ -378,6 +416,7 @@ cmd_up() {
     if [ "$_dry_run" -eq 1 ]; then
         printf 'tmux new-session -d -P -F %s -s %s -n %s -c %s -- cat\n' \
             "'#{window_id}'" "$SESSION" "$SERVER_WINDOW" "$_root_quoted"
+        printf 'tmux set-environment -t %s LC_ALL %s\n' "=$SESSION" "$PANEL_LOCALE"
         printf 'tmux set-option -s history-limit 50000\n'
         printf 'tmux set-window-option -t <server-window-id> remain-on-exit on\n'
         printf 'tmux set-window-option -t <server-window-id> monitor-activity on\n'
@@ -405,7 +444,7 @@ EOF
         return 0
     fi
 
-    if ! command -v tmux >/dev/null 2>&1; then
+    if [ -z "$TMUX_BIN" ]; then
         echo "[frpc] ERROR: tmux not found (install it or add it to PATH)" >&2
         exit 2
     fi
@@ -437,6 +476,10 @@ EOF
 
     if ! _server_window_id=$(tmux new-session -d -P -F '#{window_id}' -s "$SESSION" -n "$SERVER_WINDOW" -c "$ROOT" -- cat); then
         echo "[frpc] ERROR: could not create tmux session $SESSION" >&2
+        exit 1
+    fi
+    if ! tmux set-environment -t "=$SESSION" LC_ALL "$PANEL_LOCALE"; then
+        echo "[frpc] ERROR: could not give session $SESSION a UTF-8 locale" >&2
         exit 1
     fi
     if ! tmux set-option -s history-limit 50000; then
@@ -519,7 +562,7 @@ cmd_down() {
             exit 2
             ;;
     esac
-    if ! command -v tmux >/dev/null 2>&1; then
+    if [ -z "$TMUX_BIN" ]; then
         echo "[frpc] ERROR: tmux not found (install it or add it to PATH)" >&2
         exit 2
     fi
@@ -567,7 +610,7 @@ cmd_status() {
         usage >&2
         exit 2
     fi
-    if ! command -v tmux >/dev/null 2>&1; then
+    if [ -z "$TMUX_BIN" ]; then
         echo "[frpc] ERROR: tmux not found (install it or add it to PATH)" >&2
         exit 2
     fi
@@ -610,7 +653,7 @@ cmd_attach() {
         usage >&2
         exit 2
     fi
-    if ! command -v tmux >/dev/null 2>&1; then
+    if [ -z "$TMUX_BIN" ]; then
         echo "[frpc] ERROR: tmux not found (install it or add it to PATH)" >&2
         exit 2
     fi

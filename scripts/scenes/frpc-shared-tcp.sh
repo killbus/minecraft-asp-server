@@ -72,6 +72,10 @@
 #  reload aimed at a file the configuration does not mention changes
 #  nothing, and says nothing.
 #
+#  The session, and the UTF-8 locale its panes get, belong to frpc.sh:
+#  this script creates no session of its own - it adds a mux window to
+#  the one frpc.sh made and starts the server window last.
+#
 #  Requires: POSIX sh, tmux, frpc, haproxy.
 # ============================================================
 set -eu
@@ -87,8 +91,39 @@ MUX_BEDROCK=${MUX_BEDROCK:-127.0.0.1:19132}
 MUX_TLS_LISTEN=${MUX_TLS_LISTEN:-127.0.0.1:25567}
 MUX_STOP_TIMEOUT=${MUX_STOP_TIMEOUT:-10}
 
+# Captured before the C locale below, which belongs to this script alone.
+_caller_locale=${LC_ALL-}
+
 LC_ALL=C
 export LC_ALL
+
+# Every tmux call this script makes runs in a UTF-8 locale, and so does the
+# mux window it adds: the frpc scene below owns the session environment, and
+# this keeps the calls made here consistent with it. The caller's UTF-8
+# locale is preferred, then C.UTF-8, which glibc carries itself; the same
+# FRPC_PANEL_LOCALE override applies.
+PANEL_LOCALE=${FRPC_PANEL_LOCALE:-}
+if [ -z "$PANEL_LOCALE" ]; then
+    for _panel_candidate in "$_caller_locale" "${LANG:-}" C.UTF-8; do
+        case "$_panel_candidate" in
+            *[Uu][Tt][Ff]-8|*[Uu][Tt][Ff]8)
+                PANEL_LOCALE=$_panel_candidate
+                break
+                ;;
+        esac
+    done
+fi
+
+# The tmux binary, resolved before the wrapper below hides the name from
+# `command -v`.
+TMUX_BIN=$(command -v tmux 2>/dev/null || true)
+
+# Every tmux call runs in the panel locale: the client's own locale is what
+# decides how tmux renders and captures multibyte text, and what a pane it
+# starts inherits.
+tmux() {
+    LC_ALL=$PANEL_LOCALE "$TMUX_BIN" "$@"
+}
 
 case "$0" in
     */*)
@@ -894,7 +929,7 @@ cmd_up() {
     fi
 
     require_frpc || exit 1
-    if ! command -v tmux >/dev/null 2>&1; then
+    if [ -z "$TMUX_BIN" ]; then
         echo "[frpc-shared] ERROR: tmux not found (install it or add it to PATH)" >&2
         exit 2
     fi
