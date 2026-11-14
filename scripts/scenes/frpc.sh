@@ -21,12 +21,19 @@
 # ============================================================
 set -eu
 
-SESSION=asp-frpc
 SERVER_WINDOW=server
 STOP_TIMEOUT=${FRPC_STOP_TIMEOUT:-180}
 
 LC_ALL=C
 export LC_ALL
+
+SESSION=${FRPC_SESSION:-asp-frpc}
+case "$SESSION" in
+    ''|*[!A-Za-z0-9_-]*)
+        echo "[frpc] ERROR: FRPC_SESSION must use only letters, digits, '_' and '-'" >&2
+        exit 2
+        ;;
+esac
 
 case "$0" in
     */*)

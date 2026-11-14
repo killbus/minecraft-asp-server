@@ -302,7 +302,8 @@ Two signalling arrangements exist:
   that TCP port has to be reachable too (port forward, or a second frpc
   TCP proxy beside the UDP one). Plain HTTP works but shows a one-time
   "trust on first use" prompt; HTTPS needs a certificate for a real host
-  name.
+  name. When only one public TCP port is available, 10.1 shares it
+  between Java and this signalling listener with HAProxy.
 
 `bedrock.signaling.advertise-addresses` must hold the numeric public IP
 and external UDP port that really reaches the NetherNet listener (for
@@ -556,6 +557,8 @@ checklist. The core `start.*`, `backup.*` and runtime verification scripts
 neither call nor depend on it; deleting the script leaves them unchanged.
 
 The verbs are `up`, `down`, `status`, `attach` and `help`.
+`FRPC_SESSION` overrides the tmux session name (default `asp-frpc`);
+letters, digits, `_` and `-` only.
 
 It requires `tmux` and `frpc` on PATH. The script does not read or copy frp
 configuration files: pass each file, or a directory of files, with `--config`.
@@ -574,3 +577,90 @@ visible; restart it explicitly with `down` followed by `up`. `down` sends
 `stop` to the server console and waits up to `FRPC_STOP_TIMEOUT` seconds
 (default 180) before removing the session. Use `--dry-run` to print the tmux
 commands without starting anything.
+
+### 10.1 Shared TCP entry for Java and Bedrock signalling (Linux only)
+
+`scripts/scenes/frpc-shared-tcp.sh` is a variant of the frpc scene for
+hosts where one public TCP port has to carry both Java Minecraft and
+Bedrock NetherNet built-in signalling. It is optional in the same way
+as `frpc.sh`: `start.*`, `backup.*` and the verifier do not call it, and
+deleting the scene scripts leaves them unchanged.
+
+It creates the `asp-frpc-shared` session with the `server` window plus
+one `frpc-<name>` window per config, exactly as `frpc.sh` would, and
+adds a second window, `mux`, running HAProxy as an L4 demultiplexer in
+front of two local listeners:
+
+| Local endpoint | Role |
+| --- | --- |
+| `127.0.0.1:25566` (mux, default) | public TCP entry, demultiplexed |
+| `127.0.0.1:25565` | Java server (default backend) |
+| `127.0.0.1:19132` | Geyser NetherNet TCP signalling |
+
+Classification: a TLS ClientHello (`req.ssl_hello_type 1`) or an HTTP
+method / HTTP/2 preface goes to Geyser; a Java legacy ping (`0xFE`) or a
+handshake packet (`0x00` at offset 1) goes to Java; anything still
+unclassified after `inspect-delay 3s` falls through to Java. HAProxy
+does not terminate TLS - the certificate stays in Geyser
+(`bedrock.signaling.builtin.https.*`), so `--listen` is a transparent
+byte pipe.
+
+Prerequisites: `tmux`, `frpc` and `haproxy` on PATH (`HAPROXY=/path/to/haproxy`
+overrides the binary). Run it from the repository root:
+
+```
+sh scripts/scenes/frpc-shared-tcp.sh up --config ~/asp-frpcs --no-attach
+sh scripts/scenes/frpc-shared-tcp.sh status
+sh scripts/scenes/frpc-shared-tcp.sh down
+```
+
+The frpc side needs two proxies for one public address:
+
+```toml
+# TCP: Java + Bedrock built-in signalling -> HAProxy mux
+[[proxies]]
+name = "minecraft_tcp"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 25566
+remotePort = <tcp-port>
+
+# UDP: NetherNet media plane -> Geyser (unchanged, not behind HAProxy)
+[[proxies]]
+name = "minecraft_bedrock_media"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 19132
+remotePort = <udp-port>
+```
+
+With that mapping Java is joined at `<public-ip>:<tcp-port>` and the Bedrock
+entry point is the same `<public-ip>:<tcp-port>`; the media plane is reached
+through `bedrock.signaling.advertise-addresses`, which keeps the numeric
+public IP and the UDP remote port (`"<public-ip>:<udp-port>"`, see 4.2).
+
+`bedrock.signaling.mode` decides what the Geyser backend serves:
+`builtin` binds the TCP signalling listener that HAProxy forwards to and
+does not register with the external service (no `*.wdn.gg` name);
+`hybrid` serves that listener and still registers with the external
+service, so the `*.wdn.gg:443` address stays available as a fallback.
+`nxs` (the default) leaves the `geyser_signaling` backend with nothing
+to talk to. Because HAProxy does not terminate TLS, signalling is only
+HTTPS when Geyser presents a certificate valid for the name the player
+typed; a raw public IP cannot have a public certificate, so the mobile
+clients that refuse plain HTTP can still fail - `hybrid`/`nxs` or a real
+host name over this port are the ways around that.
+
+Two deliberate limits. HAProxy forwards raw bytes, so leave frpc's
+`transport.proxyProtocolVersion` unset: the scene does not speak PROXY
+protocol and the backends must not be configured to expect it. And it
+shares TCP only; the WebRTC media plane is UDP and still needs its own
+frpc proxy.
+
+`--dry-run` prints the HAProxy configuration and the tmux commands
+without starting tmux, frpc or HAProxy. `--listen`, `--java` and
+`--bedrock` override the three local endpoints. `--haproxy-config FILE`
+substitutes a hand-written configuration, which is checked with
+`haproxy -c -f` before anything starts and is never rewritten. Without
+it the scene writes `.tmp/frpc-shared-tcp/haproxy.cfg` (gitignored) on
+every `up`.
