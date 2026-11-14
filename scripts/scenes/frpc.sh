@@ -14,8 +14,16 @@
 #    scripts/scenes/frpc.sh attach
 #
 #  A --config directory expands to its immediate non-hidden regular
-#  files in name order; a file is used as given. Repeat --config for
-#  more than one input.
+#  files that are named like frpc configurations (.ini, .toml, .yaml,
+#  .yml), in name order; anything else in the directory is reported on
+#  stderr and ignored, so a key file or a backup cannot be handed to
+#  frpc. A file is used as given whatever it is called. Repeat --config
+#  for more than one input.
+#
+#  Every sidecar starts in the directory of its own configuration, so the
+#  relative paths inside a configuration (certificates, logs, plugin
+#  files) resolve against the file the operator wrote, not against the
+#  repository.
 #
 #  The server window is started last, after every frpc sidecar has stayed
 #  alive for FRPC_READY_TIMEOUT seconds. --defer-server leaves it as a
@@ -82,6 +90,35 @@ quote_sh() {
         fi
     done
     _q_result=$_q_result"'"
+}
+
+# frpc reads .ini (frp 0.51 and older) and .toml, .yaml/.yml or .json
+# (0.52 and newer). Only the file-name extensions a directory input may
+# select are listed here: a name is matched portably, without tr.
+is_config_name() {
+    case "$1" in
+        *.[Ii][Nn][Ii]|*.[Tt][Oo][Mm][Ll]|*.[Yy][Aa][Mm][Ll]|*.[Yy][Mm][Ll])
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# Set _sidecar to the command for one configuration: frpc runs with the
+# configuration's own directory as its working directory, because frpc
+# resolves the relative paths inside a configuration (certificates, logs,
+# plugin files) against the working directory. exec leaves frpc as the
+# process of the pane, so its exit is what remain-on-exit shows.
+# Uses _frpc_quoted, which the caller sets.
+sidecar_command() {
+    _sc_path=$1
+    _sc_dir=${_sc_path%/*}
+    [ -n "$_sc_dir" ] || _sc_dir=/
+    quote_sh "$_sc_path"
+    _sc_path_quoted=$_q_result
+    quote_sh "$_sc_dir"
+    _sc_dir_quoted=$_q_result
+    _sidecar="cd $_sc_dir_quoted && exec $_frpc_quoted -c $_sc_path_quoted"
 }
 
 # Append one resolved config, rejecting duplicate window names.
@@ -169,6 +206,10 @@ resolve_configs() {
             fi
             for _cfg_path in "$_cfg_dir"/*; do
                 if [ ! -f "$_cfg_path" ]; then
+                    continue
+                fi
+                if ! is_config_name "${_cfg_path##*/}"; then
+                    echo "[frpc] note: ignoring $_cfg_path (not .ini/.toml/.yaml/.yml)" >&2
                     continue
                 fi
                 if ! add_config "$_cfg_path"; then
@@ -345,9 +386,8 @@ cmd_up() {
             [ -n "$_line" ] || continue
             _bare=${_line%%'	'*}
             _path=${_line#*'	'}
-            quote_sh "$_path"
-            _path_quoted=$_q_result
-            _sidecar_command="$_frpc_quoted -c $_path_quoted"
+            sidecar_command "$_path"
+            _sidecar_command=$_sidecar
             printf 'tmux new-window -P -F %s -t %s -n %s -c %s -- cat\n' \
                 "'#{window_id}'" "=$SESSION" "frpc-$_bare" "$_root_quoted"
             printf 'tmux set-window-option -t <window-id> remain-on-exit on\n'
@@ -420,8 +460,8 @@ EOF
         [ -n "$_line" ] || continue
         _bare=${_line%%'	'*}
         _path=${_line#*'	'}
-        quote_sh "$_path"
-        _sidecar_command="$_frpc_quoted -c $_q_result"
+        sidecar_command "$_path"
+        _sidecar_command=$_sidecar
         if ! spawn_window "=$SESSION" "frpc-$_bare" "$_sidecar_command"; then
             echo "[frpc] ERROR: could not create window frpc-$_bare; server not started" >&2
             return 1

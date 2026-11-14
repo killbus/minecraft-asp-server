@@ -585,7 +585,18 @@ letters, digits, `_` and `-` only.
 It requires `tmux` and `frpc` on PATH. The script does not read or copy frp
 configuration files: pass each file, or a directory of files, with `--config`.
 Directory inputs expand to that directory's immediate non-hidden regular files
-in name order.
+that are named like frpc configurations (`.ini`, `.toml`, `.yaml`, `.yml`) in
+name order; every other file is reported on stderr as
+`note: ignoring <path>` and left alone, so a certificate, a backup or a note
+may sit beside the configs. A file named explicitly with `--config` is used
+whatever it is called.
+
+Each `frpc-<name>` window runs frpc with the directory of *its own*
+configuration as the working directory, because frpc resolves the relative
+paths inside a configuration (certificates, logs, plugin files) against it.
+A relative path in a config therefore means "next to this file", not "next
+to the repository". The server window is unaffected: `start.sh` still runs
+from the repository root.
 
 ```
 scripts/scenes/frpc.sh up --config ~/frp --no-attach
@@ -604,7 +615,11 @@ failed pane visible; restart with `down` followed by `up`. `down` sends
 deferred is killed immediately. `--defer-server` stops after the sidecar
 check and leaves the server window as a placeholder, which is what the
 shared-TCP scene in 10.1 composes with. Use `--dry-run` to print the tmux
-commands without starting anything.
+commands without starting anything. Two test files cover all of this
+without tmux or frpc being installed: `tests/test_frpc_scene_configs.py`
+(which files a `--config` directory contributes) and
+`tests/test_frpc_scene_spawn.py` (what each window is started with, against
+a stub tmux that records its arguments).
 
 ### 10.1 Shared TCP entry for Java and Bedrock signalling (Linux only)
 
@@ -622,7 +637,9 @@ deliberate: sidecars first (`frpc.sh --defer-server`), HAProxy second
 (the window must stay alive and bind the listen port within
 `MUX_READY_TIMEOUT` seconds, default 10), server last. A sidecar or mux
 that fails leaves the other prerequisites untouched and the server
-unstarted.
+unstarted. The sidecar windows inherit the working directory rule of 10:
+each frpc runs in the directory of its own configuration, while HAProxy and
+the server run from the repository root.
 
 | Local endpoint | Role |
 | --- | --- |
@@ -671,7 +688,11 @@ configuration), and refuses a `--tls-listen` that collides with
 from frpc: keep `type = "tcp"` and leave NATFRP's `auto_https` off, since
 frpc terminating TLS would reverse-proxy the whole stream and Java cannot
 speak that. `transport.tls.enable` only wraps the frpc-to-frps transport
-and is unrelated.
+and is unrelated. It may sit in the same directory as the configs, or a
+subdirectory of it: a `--config` directory only takes `.ini`, `.toml`,
+`.yaml` and `.yml`, and reports anything else it skipped. The scene
+resolves `--tls-cert` to an absolute path before HAProxy reads it, so that
+path does not depend on the working directory.
 
 Two things HAProxy cannot fix. An frps node that whitelists SNI or Host
 against domains bound to the tunnel rejects an unknown name before the
