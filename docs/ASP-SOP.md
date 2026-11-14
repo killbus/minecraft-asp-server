@@ -762,3 +762,48 @@ signalling backend, that plain HTTP on the shared port still reaches it,
 and that Java bytes reach the Java backend. It exits 0 only when all four
 checks pass. What it cannot cover is the path beyond this machine: the
 frps tunnel, an frps node's SNI/Host whitelist and a real Bedrock client.
+
+The path beyond this machine needs no certificate to check either, but it
+does need the whole chain up (frpc, the mux and the server), otherwise a
+`NO DATA` line cannot be attributed to a layer. `--local-mux` adds the
+local half as a control:
+
+```sh
+python3 scripts/probe_public_entry.py --host <node> --port <remote-port> \
+    --local-mux 127.0.0.1:25566
+```
+
+It opens the public port with a Minecraft legacy ping, a plain HTTP GET and
+a TLS handshake carrying the SNI followed by the same HTTP request inside
+it, and reports for each whether the server, an interception page or
+nothing answered; the certificate is judged in a separate step, so "the
+path is broken", "nothing answers inside TLS" and "the certificate is
+untrusted" cannot be mistaken for each other. It refuses to overstate a result when
+the host resolves into `198.18.0.0/15`, the fake-IP range a proxy resolver
+hands out: that answer describes the resolver, not the node. A Java answer
+is the proof that the tunnel carries the port end to end. In the control
+block a `NO DATA` on the local `http` line is expected while
+`bedrock.signaling.mode` is `nxs`, because nothing serves that backend in
+that mode. An HTML page
+from an IDC (the page carries `0632idc.com` and `sorry.png`) is a
+datacenter domain-whitelist interception, and no certificate, trusted or
+self-signed, lifts it - signalling has to move to the external service
+instead, which is what `hybrid` exists for.
+
+The probe lives in `scripts/` rather than `tests/` on purpose: what it
+measures is the node and the datacenter in front of it, which no local
+fixture can stand in for, so it is an operator diagnostic and not part of
+the regression suite. Its judgement - a datacenter page versus a server
+answer, a `198.18.0.0/15` address as a resolver artefact, the exit codes -
+does not need a live node and is covered against loopback fakes by
+`tests/test_probe_public_entry.py`.
+
+One topology the mux cannot decide by itself: when the provider terminates
+TLS instead - NATFRP's `auto_https` with a certificate for the bound domain -
+our `--tls-cert` becomes redundant (two TLS layers), the port reaches the
+mux as plain HTTP, and a bound domain is also what lifts the datacenter's
+HTTP interception in the first place. Java is still not HTTP, so on that
+port Java depends on what the provider's auto-detect mode does with
+non-HTTP bytes. Measure that with the probe instead of assuming it; if the
+answer is that they are dropped, give Java its own tunnel and remote port
+and let this port serve signalling only.
