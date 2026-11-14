@@ -44,7 +44,9 @@ if not "%ASP_SKIP_BACKUP%"=="1" (
 
 REM -Xmx / -Xms: tune to your RAM. Bedrock+Java mixed load is heavier
 REM than Java-only. 4G heap is a sane default for a small SMP.
-"%JAVA%" -Xms2G -Xmx4G -XX:+UseG1GC -jar asp-server.jar
+REM Upstream Paper's version API describes Paper, not this ASP fork, so the
+REM async startup update check can only produce noise here.
+"%JAVA%" -Xms2G -Xmx4G -XX:+UseG1GC -Dpaper.disableStartupVersionCheck=true -jar asp-server.jar
 set "EXITCODE=%errorlevel%"
 echo.
 echo [start] Server exited (code %EXITCODE%).

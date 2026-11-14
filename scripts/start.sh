@@ -51,4 +51,9 @@ fi
 
 # -Xms / -Xmx: tune to available RAM. Bedrock+Java mixed load is
 # heavier than Java-only. 4G heap is a sane default for a small SMP.
-exec "$JAVA" -Xms2G -Xmx4G -XX:+UseG1GC -jar asp-server.jar
+# Upstream Paper's version API describes Paper, not this ASP fork, so the
+# async startup update check can only produce noise here. The property is
+# read by MinecraftServer before it schedules that fetch.
+exec "$JAVA" -Xms2G -Xmx4G -XX:+UseG1GC \
+    -Dpaper.disableStartupVersionCheck=true \
+    -jar asp-server.jar

@@ -385,6 +385,22 @@ logs, and `/geyser nethernet status`, `/geyser nethernet diagnostics` or
   - `scripts/start.sh` (Linux/macOS): `JAVA` env override, fails fast
     on a missing or non-25 JDK, runs foreground via `exec`.
     Unattended: `nohup scripts/start.sh &` or a systemd unit.
+- Both wrappers pass `-Dpaper.disableStartupVersionCheck=true`. Paper's
+  startup version fetch is asynchronous (`MCUtil.ASYNC_EXECUTOR`), so a
+  blocked request or an HTTP 403 such as
+  `fill.papermc.io/v3/projects/paper` does not stop the server - but it
+  logs ERROR/WARN noise and can hold an async thread while a filtered
+  connection times out. `MinecraftServer` reads the property before
+  scheduling the fetch, so it disables the check independently of
+  `config/paper-global.yml` `update-checker.enabled` (still `true` by
+  default). The upstream Paper version feed does not describe this ASP
+  fork anyway; keep upgrades on the 4.1 lock process instead.
+- Plugin update checks are separate toggles:
+  `plugins/ViaVersion/config.yml` and `plugins/GrimAC/config.yml` each
+  have `check-for-updates`; `plugins/Geyser-Spigot/config.yml`
+  `notify-on-new-bedrock-update` only reports Bedrock support, it is not
+  a Geyser self-update. Disabling a check removes only the notification,
+  not plugin functionality.
 - Both wrappers take a backup before launching (`scripts/backup.cmd` /
   `scripts/backup.sh`). The server is stopped at that moment, so the
   snapshot is consistent - for a server that is not running 24/7 this is
