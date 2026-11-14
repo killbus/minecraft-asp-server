@@ -559,6 +559,7 @@ neither call nor depend on it; deleting the script leaves them unchanged.
 The verbs are `up`, `down`, `status`, `attach` and `help`.
 `FRPC_SESSION` overrides the tmux session name (default `asp-frpc`);
 letters, digits, `_` and `-` only.
+`FRPC` overrides the `frpc` binary (default: first `frpc` on PATH).
 
 It requires `tmux` and `frpc` on PATH. The script does not read or copy frp
 configuration files: pass each file, or a directory of files, with `--config`.
@@ -572,10 +573,16 @@ scripts/scenes/frpc.sh down
 ```
 
 `up` creates the `asp-frpc` session with a `server` window and one
-`frpc-<name>` window per config. `remain-on-exit` keeps a failed sidecar's pane
-visible; restart it explicitly with `down` followed by `up`. `down` sends
+`frpc-<name>` window per config. It starts every sidecar first and only
+respawns the server window after each `frpc` process has stayed alive for
+`FRPC_READY_TIMEOUT` seconds (default 5); a sidecar that exits aborts the
+start and leaves the session up for inspection. `remain-on-exit` keeps a
+failed pane visible; restart with `down` followed by `up`. `down` sends
 `stop` to the server console and waits up to `FRPC_STOP_TIMEOUT` seconds
-(default 180) before removing the session. Use `--dry-run` to print the tmux
+(default 180) before removing the session; a session whose server is still
+deferred is killed immediately. `--defer-server` stops after the sidecar
+check and leaves the server window as a placeholder, which is what the
+shared-TCP scene in 10.1 composes with. Use `--dry-run` to print the tmux
 commands without starting anything.
 
 ### 10.1 Shared TCP entry for Java and Bedrock signalling (Linux only)
@@ -586,10 +593,15 @@ Bedrock NetherNet built-in signalling. It is optional in the same way
 as `frpc.sh`: `start.*`, `backup.*` and the verifier do not call it, and
 deleting the scene scripts leaves them unchanged.
 
-It creates the `asp-frpc-shared` session with the `server` window plus
-one `frpc-<name>` window per config, exactly as `frpc.sh` would, and
-adds a second window, `mux`, running HAProxy as an L4 demultiplexer in
-front of two local listeners:
+It creates the `asp-frpc-shared` session with a placeholder `server`
+window plus one `frpc-<name>` window per config, then adds a `mux`
+window running HAProxy as an L4 demultiplexer in front of two local
+listeners, and only then starts the server in its window. The order is
+deliberate: sidecars first (`frpc.sh --defer-server`), HAProxy second
+(the window must stay alive and bind the listen port within
+`MUX_READY_TIMEOUT` seconds, default 10), server last. A sidecar or mux
+that fails leaves the other prerequisites untouched and the server
+unstarted.
 
 | Local endpoint | Role |
 | --- | --- |
@@ -605,8 +617,11 @@ does not terminate TLS - the certificate stays in Geyser
 (`bedrock.signaling.builtin.https.*`), so `--listen` is a transparent
 byte pipe.
 
-Prerequisites: `tmux`, `frpc` and `haproxy` on PATH (`HAPROXY=/path/to/haproxy`
-overrides the binary). Run it from the repository root:
+Prerequisites: `tmux`, `frpc` and `haproxy` on PATH
+(`HAPROXY=/path/to/haproxy` and `FRPC=/path/to/frpc` override the
+binaries; both are resolved to absolute paths because the tmux server
+does not have to share the caller's PATH). Run it from the repository
+root:
 
 ```
 sh scripts/scenes/frpc-shared-tcp.sh up --config ~/asp-frpcs --no-attach
@@ -662,5 +677,7 @@ without starting tmux, frpc or HAProxy. `--listen`, `--java` and
 `--bedrock` override the three local endpoints. `--haproxy-config FILE`
 substitutes a hand-written configuration, which is checked with
 `haproxy -c -f` before anything starts and is never rewritten. Without
-it the scene writes `.tmp/frpc-shared-tcp/haproxy.cfg` (gitignored) on
-every `up`.
+it the scene creates `.tmp/frpc-shared-tcp/` as needed and atomically
+rewrites `.tmp/frpc-shared-tcp/haproxy.cfg` (gitignored) on every `up`.
+`up` refuses to run while `asp-frpc-shared` already exists; use `down`
+first.

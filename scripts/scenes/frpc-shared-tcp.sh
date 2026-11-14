@@ -8,6 +8,10 @@
 #  TCP port; the Bedrock WebRTC media plane still needs its own
 #  frpc UDP proxy.
 #
+#  Start order: frpc sidecars first, HAProxy second (it must bind the
+#  listen port), the Java server last. MUX_READY_TIMEOUT (default 10)
+#  bounds the HAProxy wait.
+#
 #  Usage:
 #    scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> \
 #        [--config <dir|file>]... [--listen HOST:PORT] \
@@ -39,8 +43,8 @@ set -eu
 SERVER_WINDOW=server
 MUX_WINDOW=mux
 SESSION=asp-frpc-shared
-STOP_TIMEOUT=${FRPC_STOP_TIMEOUT:-180}
 HAPROXY=${HAPROXY:-haproxy}
+MUX_READY_TIMEOUT=${MUX_READY_TIMEOUT:-10}
 MUX_LISTEN=${MUX_LISTEN:-127.0.0.1:25566}
 MUX_JAVA=${MUX_JAVA:-127.0.0.1:25565}
 MUX_BEDROCK=${MUX_BEDROCK:-127.0.0.1:19132}
@@ -172,13 +176,19 @@ EOF
 
 generate_haproxy_config() {
     _gh_cfg=$1
-    if ! print_haproxy_config "$2" "$3" "$4" > "$_gh_cfg"; then
-        case "$_gh_cfg" in
-            */*) _gh_dir=${_gh_cfg%/*} ;;
-            *) _gh_dir=. ;;
-        esac
-        mkdir -p "$_gh_dir" || return 1
-        print_haproxy_config "$2" "$3" "$4" > "$_gh_cfg" || return 1
+    case "$_gh_cfg" in
+        */*) _gh_dir=${_gh_cfg%/*} ;;
+        *) _gh_dir=. ;;
+    esac
+    mkdir -p "$_gh_dir" || return 1
+    _gh_tmp=${_gh_cfg}.tmp.$$
+    if ! print_haproxy_config "$2" "$3" "$4" > "$_gh_tmp"; then
+        rm -f "$_gh_tmp"
+        return 1
+    fi
+    if ! mv -f "$_gh_tmp" "$_gh_cfg"; then
+        rm -f "$_gh_tmp"
+        return 1
     fi
 }
 
@@ -217,10 +227,55 @@ spawn_window() {
     tmux respawn-window -k -t "$_sw_id" "$_sw_command"
 }
 
-mux_window_exists() {
-    command -v tmux >/dev/null 2>&1 || return 1
-    tmux list-windows -t "=$SESSION" -F '#{window_name}' 2>/dev/null \
-        | grep -F -x "$MUX_WINDOW" >/dev/null 2>&1
+# Return 0 when LISTEN is accepting TCP, 1 when it is not, 2 when no
+# listening-socket tool is available (caller may then trust the window).
+mux_listen_check() {
+    _ml_port=${LISTEN##*:}
+    for _ml_tool in 'ss -ltn' 'netstat -ltn'; do
+        _ml_bin=${_ml_tool%% *}
+        command -v "$_ml_bin" >/dev/null 2>&1 || continue
+        if _ml_out=$($_ml_tool 2>/dev/null); then
+            if printf '%s\n' "$_ml_out" | awk '{print $4}' | grep -F ":$_ml_port" >/dev/null 2>&1; then
+                return 0
+            fi
+            return 1
+        fi
+    done
+    return 2
+}
+
+# Wait for the HAProxy window to stay alive and bind the listen port.
+wait_mux_ready() {
+    _wm_elapsed=0
+    while [ "$_wm_elapsed" -lt "$MUX_READY_TIMEOUT" ]; do
+        if ! _wm_dead=$(tmux list-panes -t "=$SESSION:$MUX_WINDOW" -F '#{pane_dead}' 2>/dev/null); then
+            _wm_dead=1
+        fi
+        if [ "$_wm_dead" != 0 ]; then
+            echo "[frpc-shared] ERROR: $MUX_WINDOW window is not running" >&2
+            if _wm_capture=$(tmux capture-pane -p -J -t "=$SESSION:$MUX_WINDOW" 2>/dev/null); then
+                printf '%s\n' "$_wm_capture" | tail -n 20 >&2
+            fi
+            return 1
+        fi
+        if [ "$_wm_elapsed" -ge 2 ]; then
+            _wm_rc=0
+            mux_listen_check || _wm_rc=$?
+            if [ "$_wm_rc" -eq 0 ]; then
+                return 0
+            fi
+            if [ "$_wm_rc" -eq 2 ]; then
+                return 0
+            fi
+        fi
+        sleep 1
+        _wm_elapsed=$((_wm_elapsed + 1))
+    done
+    echo "[frpc-shared] ERROR: $MUX_WINDOW did not bind $LISTEN within ${MUX_READY_TIMEOUT}s" >&2
+    if _wm_capture=$(tmux capture-pane -p -J -t "=$SESSION:$MUX_WINDOW" 2>/dev/null); then
+        printf '%s\n' "$_wm_capture" | tail -n 20 >&2
+    fi
+    return 1
 }
 
 resolve_absolute_file() {
@@ -315,6 +370,12 @@ cmd_up() {
             exit 2
         fi
     done
+    case "$MUX_READY_TIMEOUT" in
+        ''|*[!0-9]*)
+            echo "[frpc-shared] ERROR: MUX_READY_TIMEOUT must be a whole number of seconds" >&2
+            exit 2
+            ;;
+    esac
 
     # Rebuild the positional list as frpc arguments. Quote_sh cannot be used
     # here: an unquoted expansion of a quoted fragment would pass the literal
@@ -344,6 +405,15 @@ cmd_up() {
         _haproxy_config=$DEFAULT_HAPROXY_CONFIG
     fi
 
+    quote_sh "$HAPROXY"
+    _haproxy_quoted=$_q_result
+    quote_sh "$_haproxy_config"
+    _haproxy_config_quoted=$_q_result
+    _haproxy_command="$_haproxy_quoted -db -f $_haproxy_config_quoted"
+    quote_sh "$ROOT"
+    _root_quoted=$_q_result
+    _server_command='bash scripts/start.sh'
+
     if [ "$_dry_run" -eq 1 ]; then
         if [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
             printf '# frpc-shared: would generate HAProxy config %s\n' "$_haproxy_config"
@@ -351,9 +421,14 @@ cmd_up() {
         else
             printf '# frpc-shared: would use HAProxy config %s\n' "$_haproxy_config"
         fi
-        printf '# frpc-shared: tmux window %s runs %s -db -f %s\n' \
-            "$MUX_WINDOW" "$HAPROXY" "$_haproxy_config"
-        FRPC_SESSION=$SESSION "$FRPC_SH" up --dry-run "$@"
+        FRPC_SESSION=$SESSION "$FRPC_SH" up --defer-server --dry-run "$@"
+        printf 'tmux new-window -P -F %s -t %s -n %s -c %s -- cat\n' \
+            "'#{window_id}'" "=$SESSION" "$MUX_WINDOW" "$_root_quoted"
+        printf 'tmux set-window-option -t <window-id> remain-on-exit on\n'
+        printf 'tmux set-window-option -t <window-id> monitor-activity on\n'
+        printf 'tmux respawn-window -k -t <window-id> %s\n' "$_haproxy_command"
+        printf 'tmux set-window-option -t <server-window-id> @asp-server-deferred 0\n'
+        printf 'tmux respawn-window -k -t <server-window-id> %s\n' "$_server_command"
         return 0
     fi
 
@@ -365,6 +440,19 @@ cmd_up() {
     if ! command -v "$HAPROXY" >/dev/null 2>&1; then
         echo "[frpc-shared] ERROR: haproxy not found (set HAPROXY=/path/to/haproxy)" >&2
         exit 2
+    fi
+    # Use an absolute path: the tmux server may not share this shell's PATH.
+    if ! HAPROXY=$(command -v "$HAPROXY"); then
+        echo "[frpc-shared] ERROR: cannot resolve the haproxy binary" >&2
+        exit 2
+    fi
+    quote_sh "$HAPROXY"
+    _haproxy_quoted=$_q_result
+    _haproxy_command="$_haproxy_quoted -db -f $_haproxy_config_quoted"
+
+    if tmux has-session -t "=$SESSION" 2>/dev/null; then
+        printf '[frpc-shared] ERROR: session %s already exists; run down first\n' "$SESSION" >&2
+        exit 3
     fi
 
     if [ -z "$_haproxy_config" ] || [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
@@ -378,25 +466,31 @@ cmd_up() {
         exit 1
     fi
 
-    if ! FRPC_SESSION=$SESSION "$FRPC_SH" up --no-attach "$@"; then
+    # 1. Sidecars first. frpc.sh leaves the server window as a placeholder.
+    if ! FRPC_SESSION=$SESSION "$FRPC_SH" up --defer-server --no-attach "$@"; then
         echo "[frpc-shared] ERROR: frpc scene failed to start" >&2
         exit 1
     fi
 
-    if mux_window_exists; then
-        printf '[frpc-shared] %s already has a %s window; not touching it\n' "$SESSION" "$MUX_WINDOW"
-    else
-        quote_sh "$HAPROXY"
-        _haproxy_quoted=$_q_result
-        quote_sh "$_haproxy_config"
-        _haproxy_config_quoted=$_q_result
-        _haproxy_command="$_haproxy_quoted -db -f $_haproxy_config_quoted"
-        quote_sh "$_haproxy_command"
-        _haproxy_command_quoted=$_q_result
-        if ! spawn_window "=$SESSION" "$MUX_WINDOW" "$_haproxy_command_quoted"; then
-            echo "[frpc-shared] ERROR: could not create the $MUX_WINDOW window; session $SESSION left running" >&2
-            exit 1
-        fi
+    # 2. The demultiplexer must be listening before the Java server starts.
+    if ! spawn_window "=$SESSION" "$MUX_WINDOW" "$_haproxy_command"; then
+        echo "[frpc-shared] ERROR: could not create the $MUX_WINDOW window" >&2
+        FRPC_SESSION=$SESSION "$FRPC_SH" down >/dev/null 2>&1 || true
+        exit 1
+    fi
+    if ! wait_mux_ready; then
+        FRPC_SESSION=$SESSION "$FRPC_SH" down >/dev/null 2>&1 || true
+        exit 1
+    fi
+
+    # 3. Only now start the server, the last prerequisite.
+    if ! tmux set-window-option -t "=$SESSION:$SERVER_WINDOW" @asp-server-deferred 0; then
+        echo "[frpc-shared] ERROR: could not clear the deferred server state" >&2
+        exit 1
+    fi
+    if ! tmux respawn-window -k -t "=$SESSION:$SERVER_WINDOW" "$_server_command"; then
+        echo "[frpc-shared] ERROR: could not start the server window" >&2
+        exit 1
     fi
 
     if [ "$_no_attach" -eq 1 ]; then

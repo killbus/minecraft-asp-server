@@ -8,7 +8,7 @@
 #
 #  Usage:
 #    scripts/scenes/frpc.sh up --config <dir|file> \
-#        [--config <dir|file>]... [--no-attach] [--dry-run]
+#        [--config <dir|file>]... [--no-attach] [--defer-server] [--dry-run]
 #    scripts/scenes/frpc.sh down
 #    scripts/scenes/frpc.sh status
 #    scripts/scenes/frpc.sh attach
@@ -17,12 +17,18 @@
 #  files in name order; a file is used as given. Repeat --config for
 #  more than one input.
 #
+#  The server window is started last, after every frpc sidecar has stayed
+#  alive for FRPC_READY_TIMEOUT seconds. --defer-server leaves it as a
+#  placeholder so a composing scene can start other prerequisites first.
+#
 #  Requires: POSIX sh, tmux, frpc. --dry-run does not need tmux.
 # ============================================================
 set -eu
 
 SERVER_WINDOW=server
 STOP_TIMEOUT=${FRPC_STOP_TIMEOUT:-180}
+READY_TIMEOUT=${FRPC_READY_TIMEOUT:-5}
+FRPC=${FRPC:-frpc}
 
 LC_ALL=C
 export LC_ALL
@@ -55,7 +61,7 @@ fi
 usage() {
     printf '%s\n' \
         'Usage:' \
-        '  scripts/scenes/frpc.sh up --config <dir|file> [--config <dir|file>]... [--no-attach] [--dry-run]' \
+        '  scripts/scenes/frpc.sh up --config <dir|file> [--config <dir|file>]... [--no-attach] [--defer-server] [--dry-run]' \
         '  scripts/scenes/frpc.sh down' \
         '  scripts/scenes/frpc.sh status' \
         '  scripts/scenes/frpc.sh attach' \
@@ -228,10 +234,40 @@ spawn_window() {
     tmux respawn-window -k -t "$_sw_id" "$_sw_command"
 }
 
+# Return 0 only when every frpc window is still alive after the grace
+# period. remain-on-exit keeps a failed sidecar visible for inspection.
+wait_for_sidecars() {
+    _ws_elapsed=0
+    while :; do
+        while IFS= read -r _ws_line; do
+            [ -n "$_ws_line" ] || continue
+            _ws_bare=${_ws_line%%'	'*}
+            if ! _ws_dead=$(tmux list-panes -t "=$SESSION:frpc-$_ws_bare" -F '#{pane_dead}' 2>/dev/null); then
+                _ws_dead=1
+            fi
+            if [ "$_ws_dead" != 0 ]; then
+                echo "[frpc] ERROR: sidecar frpc-$_ws_bare is not running; server not started" >&2
+                if _ws_capture=$(tmux capture-pane -p -J -t "=$SESSION:frpc-$_ws_bare" 2>/dev/null); then
+                    printf '%s\n' "$_ws_capture" | tail -n 20 >&2
+                fi
+                return 1
+            fi
+        done <<EOF
+$_resolved
+EOF
+        if [ "$_ws_elapsed" -ge "$READY_TIMEOUT" ]; then
+            return 0
+        fi
+        sleep 1
+        _ws_elapsed=$((_ws_elapsed + 1))
+    done
+}
+
 cmd_up() {
     _config_inputs=
     _have_config=0
     _no_attach=0
+    _defer_server=0
     _dry_run=0
 
     while [ "$#" -gt 0 ]; do
@@ -250,6 +286,10 @@ cmd_up() {
                 _no_attach=1
                 shift
                 ;;
+            --defer-server)
+                _defer_server=1
+                shift
+                ;;
             --dry-run)
                 _dry_run=1
                 shift
@@ -266,6 +306,12 @@ cmd_up() {
         echo "[frpc] ERROR: up needs at least one --config <dir|file>" >&2
         exit 2
     fi
+    case "$READY_TIMEOUT" in
+        ''|*[!0-9]*)
+            echo "[frpc] ERROR: FRPC_READY_TIMEOUT must be a whole number of seconds" >&2
+            exit 2
+            ;;
+    esac
 
     _old_ifs=$IFS
     IFS='
@@ -284,8 +330,9 @@ cmd_up() {
 
     quote_sh "$ROOT"
     _root_quoted=$_q_result
-    quote_sh 'bash scripts/start.sh'
-    _server_command_quoted=$_q_result
+    quote_sh "$FRPC"
+    _frpc_quoted=$_q_result
+    _server_command='bash scripts/start.sh'
 
     if [ "$_dry_run" -eq 1 ]; then
         printf 'tmux new-session -d -P -F %s -s %s -n %s -c %s -- cat\n' \
@@ -293,23 +340,28 @@ cmd_up() {
         printf 'tmux set-option -s history-limit 50000\n'
         printf 'tmux set-window-option -t <server-window-id> remain-on-exit on\n'
         printf 'tmux set-window-option -t <server-window-id> monitor-activity on\n'
-        printf 'tmux respawn-window -k -t <server-window-id> %s\n' "$_server_command_quoted"
+        printf 'tmux set-window-option -t <server-window-id> @asp-server-deferred %s\n' "$_defer_server"
         while IFS= read -r _line; do
+            [ -n "$_line" ] || continue
             _bare=${_line%%'	'*}
             _path=${_line#*'	'}
             quote_sh "$_path"
             _path_quoted=$_q_result
-            _sidecar_command="frpc -c $_path_quoted"
-            quote_sh "$_sidecar_command"
-            _sidecar_command_quoted=$_q_result
+            _sidecar_command="$_frpc_quoted -c $_path_quoted"
             printf 'tmux new-window -P -F %s -t %s -n %s -c %s -- cat\n' \
                 "'#{window_id}'" "=$SESSION" "frpc-$_bare" "$_root_quoted"
             printf 'tmux set-window-option -t <window-id> remain-on-exit on\n'
             printf 'tmux set-window-option -t <window-id> monitor-activity on\n'
-            printf 'tmux respawn-window -k -t <window-id> %s\n' "$_sidecar_command_quoted"
+            printf 'tmux respawn-window -k -t <window-id> %s\n' "$_sidecar_command"
         done <<EOF
 $_resolved
 EOF
+        if [ "$_defer_server" -eq 1 ]; then
+            printf '# server deferred; start it after the other prerequisites are ready\n'
+        else
+            printf 'tmux set-window-option -t <server-window-id> @asp-server-deferred 0\n'
+            printf 'tmux respawn-window -k -t <server-window-id> %s\n' "$_server_command"
+        fi
         return 0
     fi
 
@@ -317,6 +369,17 @@ EOF
         echo "[frpc] ERROR: tmux not found (install it or add it to PATH)" >&2
         exit 2
     fi
+    if ! command -v "$FRPC" >/dev/null 2>&1; then
+        echo "[frpc] ERROR: frpc not found (set FRPC=/path/to/frpc or put it on PATH)" >&2
+        exit 2
+    fi
+    # Use an absolute path: the tmux server may not share this shell's PATH.
+    if ! _frpc_bin=$(command -v "$FRPC"); then
+        echo "[frpc] ERROR: cannot resolve the frpc binary: $FRPC" >&2
+        exit 2
+    fi
+    quote_sh "$_frpc_bin"
+    _frpc_quoted=$_q_result
 
     if tmux has-session -t "=$SESSION" 2>/dev/null; then
         if [ "$_no_attach" -eq 1 ]; then
@@ -348,19 +411,51 @@ EOF
         echo "[frpc] ERROR: could not configure the server window" >&2
         exit 1
     fi
-    tmux respawn-window -k -t "$_server_window_id" 'bash scripts/start.sh'
+    if ! tmux set-window-option -t "$_server_window_id" @asp-server-deferred "$_defer_server"; then
+        echo "[frpc] ERROR: could not mark the server window state" >&2
+        exit 1
+    fi
 
     while IFS= read -r _line; do
+        [ -n "$_line" ] || continue
         _bare=${_line%%'	'*}
         _path=${_line#*'	'}
         quote_sh "$_path"
-        _sidecar_command="frpc -c $_q_result"
+        _sidecar_command="$_frpc_quoted -c $_q_result"
         if ! spawn_window "=$SESSION" "frpc-$_bare" "$_sidecar_command"; then
-            echo "[frpc] WARNING: could not create window frpc-$_bare" >&2
+            echo "[frpc] ERROR: could not create window frpc-$_bare; server not started" >&2
+            return 1
         fi
     done <<EOF
 $_resolved
 EOF
+
+    if ! wait_for_sidecars; then
+        printf '[frpc] sidecars are not healthy; server not started (session %s left running)\n' "$SESSION" >&2
+        return 1
+    fi
+
+    if [ "$_defer_server" -eq 1 ]; then
+        printf '[frpc] sidecars ready; server deferred in session %s\n' "$SESSION"
+        if [ "$_no_attach" -eq 1 ]; then
+            return 0
+        fi
+        if [ ! -t 0 ]; then
+            printf '[frpc] stdin is not a terminal; session %s left running\n' "$SESSION"
+            return 0
+        fi
+        tmux attach-session -t "=$SESSION"
+        return 0
+    fi
+
+    if ! tmux set-window-option -t "$_server_window_id" @asp-server-deferred 0; then
+        echo "[frpc] ERROR: could not clear the deferred server state" >&2
+        exit 1
+    fi
+    if ! tmux respawn-window -k -t "$_server_window_id" "$_server_command"; then
+        echo "[frpc] ERROR: could not start the server window" >&2
+        exit 1
+    fi
 
     if [ "$_no_attach" -eq 1 ]; then
         printf '[frpc] started session %s without attaching\n' "$SESSION"
@@ -390,6 +485,15 @@ cmd_down() {
     fi
     if ! tmux has-session -t "=$SESSION" 2>/dev/null; then
         printf '[frpc] no session %s\n' "$SESSION"
+        return 0
+    fi
+
+    if ! _deferred=$(tmux show-options -w -q -v -t "=$SESSION:$SERVER_WINDOW" @asp-server-deferred 2>/dev/null); then
+        _deferred=
+    fi
+    if [ "$_deferred" = 1 ]; then
+        printf '[frpc] server is still deferred; killing session %s\n' "$SESSION"
+        tmux kill-session -t "=$SESSION"
         return 0
     fi
 
