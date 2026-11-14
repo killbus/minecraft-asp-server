@@ -59,6 +59,18 @@
 #  SIGUSR2 to the master, which re-reads the configuration and hands
 #  the listening socket to a new worker. Players on the port keep
 #  playing. The old command, respawning the mux window, drops them.
+#  That master is also why 'down' does not rely on the session: it
+#  ignores the SIGHUP a teardown sends it, so 'down' stops it by its
+#  pidfile (SIGTERM, then SIGKILL after MUX_STOP_TIMEOUT seconds), and
+#  'up' refuses to start a second master over a live one or over an
+#  occupied listen port. 'status' reads the same pidfile, which is what
+#  makes a master left behind visible instead of orphaned.
+#
+#  'status' also prints the TLS binds of the configuration the mux reads
+#  (MUX_HAPROXY_CONFIG, default the generated config), because that line
+#  is where "which certificate is being served" is actually answered: a
+#  reload aimed at a file the configuration does not mention changes
+#  nothing, and says nothing.
 #
 #  Requires: POSIX sh, tmux, frpc, haproxy.
 # ============================================================
@@ -73,6 +85,7 @@ MUX_LISTEN=${MUX_LISTEN:-127.0.0.1:25566}
 MUX_JAVA=${MUX_JAVA:-127.0.0.1:25565}
 MUX_BEDROCK=${MUX_BEDROCK:-127.0.0.1:19132}
 MUX_TLS_LISTEN=${MUX_TLS_LISTEN:-127.0.0.1:25567}
+MUX_STOP_TIMEOUT=${MUX_STOP_TIMEOUT:-10}
 
 LC_ALL=C
 export LC_ALL
@@ -97,6 +110,9 @@ fi
 FRPC_SH=$SCRIPT_DIR/frpc.sh
 DEFAULT_HAPROXY_CONFIG=$ROOT/.tmp/frpc-shared-tcp/haproxy.cfg
 DEFAULT_HAPROXY_PID=$ROOT/.tmp/frpc-shared-tcp/haproxy.pid
+# What 'status' reads. 'up --haproxy-config' says it for one run, so the
+# variable is how a status call sees the same file.
+MUX_HAPROXY_CONFIG=${MUX_HAPROXY_CONFIG:-$DEFAULT_HAPROXY_CONFIG}
 # The master holds the port, so its pidfile is what 'reload' signals.
 MUX_PIDFILE=${MUX_PIDFILE:-$DEFAULT_HAPROXY_PID}
 # The command that sends the reload signal; a variable so a test can stand in
@@ -441,6 +457,175 @@ kernel_comm() {
     printf '%.15s' "$1"
 }
 
+# Read the pidfile and decide what it names. Sets MUX_STATUS_STATE to one
+# of none, invalid, stale, other or live, plus MUX_STATUS_PID and
+# MUX_STATUS_NAME (empty when there is no process to read). It returns the
+# verdict in variables rather than on stdout because a command
+# substitution would run this in a subshell and lose them, and a caller
+# that only wants the state would then have to re-read the pidfile.
+mux_pid_status() {
+    MUX_STATUS_STATE=none
+    MUX_STATUS_PID=
+    MUX_STATUS_NAME=
+    if [ ! -f "$MUX_PIDFILE" ]; then
+        return 0
+    fi
+    if [ ! -r "$MUX_PIDFILE" ]; then
+        MUX_STATUS_STATE=invalid
+        return 0
+    fi
+    _ms_pid=$(head -n 1 "$MUX_PIDFILE" 2>/dev/null | tr -d '[:space:]' || true)
+    case "$_ms_pid" in
+        ''|*[!0-9]*)
+            MUX_STATUS_STATE=invalid
+            return 0
+            ;;
+    esac
+    MUX_STATUS_PID=$_ms_pid
+    MUX_STATUS_NAME=$(process_name "$_ms_pid")
+    if [ -z "$MUX_STATUS_NAME" ]; then
+        # Gone, or owned by someone this user cannot read: either way it is
+        # not something this scene may signal.
+        MUX_STATUS_STATE=stale
+        return 0
+    fi
+    if [ "$(kernel_comm "$MUX_STATUS_NAME")" = "$(kernel_comm "${HAPROXY##*/}")" ]; then
+        MUX_STATUS_STATE=live
+    else
+        MUX_STATUS_STATE=other
+    fi
+    return 0
+}
+
+# Say what the pidfile names. 'status' reports the mux from here, not from
+# the session: a master that outlived its session is exactly the case an
+# operator needs to see, and it has no window left to appear in.
+report_mux_status() {
+    mux_pid_status
+    case "$MUX_STATUS_STATE" in
+        live)
+            printf '[frpc-shared] mux: %s %s is up (pidfile %s)\n' \
+                "${HAPROXY##*/}" "$MUX_STATUS_PID" "$MUX_PIDFILE"
+            ;;
+        other)
+            printf '[frpc-shared] mux: WARNING pidfile %s names pid %s (%s), which is not %s\n' \
+                "$MUX_PIDFILE" "$MUX_STATUS_PID" "$MUX_STATUS_NAME" "${HAPROXY##*/}"
+            ;;
+        stale)
+            printf '[frpc-shared] mux: WARNING pid %s is gone; the pidfile is stale\n' \
+                "$MUX_STATUS_PID"
+            ;;
+        invalid)
+            printf '[frpc-shared] mux: WARNING pidfile %s holds no process id\n' \
+                "$MUX_PIDFILE"
+            ;;
+        *)
+            printf '[frpc-shared] mux: not running (no pidfile at %s)\n' \
+                "$MUX_PIDFILE"
+            ;;
+    esac
+}
+
+# Print the TLS binds of the configuration the mux reads. That line is where
+# "which certificate is being served" is actually answered, and its silence
+# is the failure mode worth breaking: reloading after writing a PEM the
+# configuration does not mention re-reads the old one and reports success.
+report_mux_tls() {
+    if [ ! -f "$MUX_HAPROXY_CONFIG" ]; then
+        printf '[frpc-shared] tls: no configuration at %s\n' "$MUX_HAPROXY_CONFIG"
+        return 0
+    fi
+    if [ ! -r "$MUX_HAPROXY_CONFIG" ]; then
+        printf '[frpc-shared] tls: WARNING cannot read %s\n' "$MUX_HAPROXY_CONFIG"
+        return 0
+    fi
+    _rt_found=0
+    _rt_binds=$(grep -F 'ssl crt ' "$MUX_HAPROXY_CONFIG" 2>/dev/null || true)
+    while IFS= read -r _rt_line; do
+        if [ -z "$_rt_line" ]; then
+            continue
+        fi
+        _rt_found=1
+        # Printed as the configuration writes it: a status line is not the
+        # place to re-parse HAProxy's own quoting.
+        printf '[frpc-shared] tls: %s\n' "${_rt_line#"${_rt_line%%[![:space:]]*}"}"
+    done <<EOF
+$_rt_binds
+EOF
+    if [ "$_rt_found" -eq 0 ]; then
+        printf '[frpc-shared] tls: %s binds no certificate; Geyser terminates TLS itself\n' \
+            "$MUX_HAPROXY_CONFIG"
+    fi
+}
+
+# Stop the master the pidfile names. Tearing down the tmux session is not
+# enough: the master ignores the SIGHUP that sends, which is what would
+# otherwise leave it on the listen port with no window left to show it.
+stop_mux() {
+    mux_pid_status
+    case "$MUX_STATUS_STATE" in
+        none)
+            return 0
+            ;;
+        invalid)
+            printf '[frpc-shared] WARNING: pidfile %s holds no process id; nothing to stop\n' \
+                "$MUX_PIDFILE" >&2
+            return 0
+            ;;
+        stale)
+            printf '[frpc-shared] mux: pid %s is gone; nothing to stop\n' \
+                "$MUX_STATUS_PID"
+            return 0
+            ;;
+        other)
+            printf '[frpc-shared] ERROR: pidfile %s names pid %s (%s), which is not %s: refusing to signal it\n' \
+                "$MUX_PIDFILE" "$MUX_STATUS_PID" "$MUX_STATUS_NAME" "${HAPROXY##*/}" >&2
+            return 1
+            ;;
+    esac
+    _sm_want=$(kernel_comm "${HAPROXY##*/}")
+    if ! "$MUX_SIGNAL" -TERM "$MUX_STATUS_PID"; then
+        printf '[frpc-shared] ERROR: cannot send SIGTERM to %s\n' "$MUX_STATUS_PID" >&2
+        return 1
+    fi
+    _sm_elapsed=0
+    while [ "$_sm_elapsed" -lt "$MUX_STOP_TIMEOUT" ]; do
+        _sm_name=$(process_name "$MUX_STATUS_PID")
+        if [ -z "$_sm_name" ]; then
+            printf '[frpc-shared] mux: %s %s stopped\n' "${HAPROXY##*/}" "$MUX_STATUS_PID"
+            return 0
+        fi
+        if [ "$(kernel_comm "$_sm_name")" != "$_sm_want" ]; then
+            # The pid was recycled while the master was going down, so the
+            # process it names now is somebody else's.
+            printf '[frpc-shared] mux: pid %s is %s now, so the master is gone\n' \
+                "$MUX_STATUS_PID" "'$_sm_name'"
+            return 0
+        fi
+        sleep 1
+        _sm_elapsed=$((_sm_elapsed + 1))
+    done
+    # Same check once more before escalating: SIGKILL is not something to
+    # aim at a pid that stopped being the master a second ago.
+    _sm_name=$(process_name "$MUX_STATUS_PID")
+    if [ -z "$_sm_name" ]; then
+        printf '[frpc-shared] mux: %s %s stopped\n' "${HAPROXY##*/}" "$MUX_STATUS_PID"
+        return 0
+    fi
+    if [ "$(kernel_comm "$_sm_name")" != "$_sm_want" ]; then
+        printf '[frpc-shared] mux: pid %s is %s now, so the master is gone\n' \
+            "$MUX_STATUS_PID" "'$_sm_name'"
+        return 0
+    fi
+    printf '[frpc-shared] WARNING: %s %s did not stop within %ss; sending SIGKILL\n' \
+        "${HAPROXY##*/}" "$MUX_STATUS_PID" "$MUX_STOP_TIMEOUT" >&2
+    if ! "$MUX_SIGNAL" -KILL "$MUX_STATUS_PID"; then
+        printf '[frpc-shared] ERROR: cannot send SIGKILL to %s\n' "$MUX_STATUS_PID" >&2
+        return 1
+    fi
+    return 0
+}
+
 cmd_up() {
     _config_inputs=
     _have_config=0
@@ -683,6 +868,31 @@ cmd_up() {
         return 0
     fi
 
+    # Refuse before anything is started. A master left behind - by a crash,
+    # or by a teardown that only sent the SIGHUP it ignores - holds the
+    # listen port, and the mux window would die on "Address already in use"
+    # instead, after the frpc sidecars had come up.
+    mux_pid_status
+    case "$MUX_STATUS_STATE" in
+        live)
+            printf '[frpc-shared] ERROR: a mux is already running as pid %s (%s); run down first\n' \
+                "$MUX_STATUS_PID" "$MUX_PIDFILE" >&2
+            exit 3
+            ;;
+        other)
+            printf '[frpc-shared] ERROR: pidfile %s names pid %s (%s), which is not %s; run down to clear it\n' \
+                "$MUX_PIDFILE" "$MUX_STATUS_PID" "$MUX_STATUS_NAME" "${HAPROXY##*/}" >&2
+            exit 3
+            ;;
+    esac
+    _pre_listen_rc=0
+    mux_listen_check || _pre_listen_rc=$?
+    if [ "$_pre_listen_rc" -eq 0 ]; then
+        printf '[frpc-shared] ERROR: something already listens on %s; run down or stop it first\n' \
+            "$LISTEN" >&2
+        exit 3
+    fi
+
     require_frpc || exit 1
     if ! command -v tmux >/dev/null 2>&1; then
         echo "[frpc-shared] ERROR: tmux not found (install it or add it to PATH)" >&2
@@ -768,11 +978,20 @@ cmd_down() {
         usage >&2
         exit 2
     fi
+    case "$MUX_STOP_TIMEOUT" in
+        ''|*[!0-9]*)
+            echo "[frpc-shared] ERROR: MUX_STOP_TIMEOUT must be a whole number of seconds" >&2
+            exit 2
+            ;;
+    esac
     require_frpc || exit 1
     _down_status=0
     FRPC_SESSION=$SESSION "$FRPC_SH" down || _down_status=$?
-    # A pidfile that outlives its master is a trap for the next caller: the
-    # pid may belong to something else by then. Remove it with the session.
+    # The sidecars and the server are tmux's to stop; the mux is not, and
+    # this is where it gets stopped. Then the pidfile goes with it: one that
+    # outlives its master is a trap for the next caller, since the pid may
+    # belong to something else by then.
+    stop_mux || _down_status=1
     rm -f "$MUX_PIDFILE"
     return "$_down_status"
 }
@@ -785,43 +1004,38 @@ cmd_reload() {
         usage >&2
         exit 2
     fi
-    if [ ! -f "$MUX_PIDFILE" ]; then
-        printf '[frpc-shared] ERROR: no pidfile at %s: the mux is not running, start it with up\n' \
-            "$MUX_PIDFILE" >&2
-        exit 2
-    fi
-    if [ ! -r "$MUX_PIDFILE" ]; then
-        printf '[frpc-shared] ERROR: cannot read the pidfile %s\n' "$MUX_PIDFILE" >&2
-        exit 2
-    fi
     # The master writes itself first; workers may follow on later lines and
-    # only the master takes the reload signal.
-    _reload_pid=$(head -n 1 "$MUX_PIDFILE" 2>/dev/null | tr -d '[:space:]' || true)
-    case "$_reload_pid" in
-        ''|*[!0-9]*)
-            printf '[frpc-shared] ERROR: %s does not hold a process id (found %s)\n' \
-                "$MUX_PIDFILE" "'$_reload_pid'" >&2
+    # only the master takes the reload signal. Which pid that is, and whether
+    # it may be signalled at all, is the same question 'down' and 'up' ask.
+    mux_pid_status
+    case "$MUX_STATUS_STATE" in
+        none)
+            printf '[frpc-shared] ERROR: no pidfile at %s: the mux is not running, start it with up\n' \
+                "$MUX_PIDFILE" >&2
+            exit 2
+            ;;
+        invalid)
+            printf '[frpc-shared] ERROR: %s does not hold a process id\n' \
+                "$MUX_PIDFILE" >&2
+            exit 2
+            ;;
+        stale)
+            printf '[frpc-shared] ERROR: cannot read process %s: the pidfile is stale, or the process belongs to another user (start the mux with up)\n' \
+                "$MUX_STATUS_PID" >&2
+            exit 2
+            ;;
+        other)
+            printf '[frpc-shared] ERROR: process %s is %s, not %s: refusing to signal it\n' \
+                "$MUX_STATUS_PID" "'$MUX_STATUS_NAME'" "${HAPROXY##*/}" >&2
             exit 2
             ;;
     esac
-    _reload_comm=$(process_name "$_reload_pid")
-    if [ -z "$_reload_comm" ]; then
-        printf '[frpc-shared] ERROR: cannot read process %s: the pidfile is stale, or the process belongs to another user (start the mux with up)\n' \
-            "$_reload_pid" >&2
-        exit 2
-    fi
-    _reload_name=${HAPROXY##*/}
-    if [ "$(kernel_comm "$_reload_comm")" != "$(kernel_comm "$_reload_name")" ]; then
-        printf '[frpc-shared] ERROR: process %s is %s, not %s: refusing to signal it\n' \
-            "$_reload_pid" "'$_reload_comm'" "$_reload_name" >&2
-        exit 2
-    fi
-    if ! "$MUX_SIGNAL" -USR2 "$_reload_pid"; then
-        printf '[frpc-shared] ERROR: cannot send SIGUSR2 to %s\n' "$_reload_pid" >&2
+    if ! "$MUX_SIGNAL" -USR2 "$MUX_STATUS_PID"; then
+        printf '[frpc-shared] ERROR: cannot send SIGUSR2 to %s\n' "$MUX_STATUS_PID" >&2
         exit 1
     fi
-    printf '[frpc-shared] reload: SIGUSR2 sent to haproxy %s, which re-reads its configuration\n' \
-        "$_reload_pid"
+    printf '[frpc-shared] reload: SIGUSR2 sent to %s %s, which re-reads its configuration\n' \
+        "${HAPROXY##*/}" "$MUX_STATUS_PID"
 }
 
 cmd_status() {
@@ -829,6 +1043,8 @@ cmd_status() {
         usage >&2
         exit 2
     fi
+    report_mux_status
+    report_mux_tls
     require_frpc || exit 1
     FRPC_SESSION=$SESSION "$FRPC_SH" status
 }

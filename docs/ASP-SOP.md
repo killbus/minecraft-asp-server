@@ -648,13 +648,41 @@ runs HAProxy in master-worker mode (`-W -db`) with a pidfile
 which re-reads the configuration and hands the listening socket to a new
 worker, so the port never drops and the players on it are not disconnected.
 Respawning the mux window would do the opposite, which is why the reload is
-a signal and not a restart. `reload` reads the first line of the pidfile,
-checks that the process it names is HAProxy rather than trusting the file,
-and refuses anything else: a stale pidfile plus a recycled pid would
-otherwise aim `SIGUSR2` at an unrelated process. `down` removes the pidfile
-with the session. Since that check compares the running process name with
-the name of the `HAPROXY` binary, a `reload` has to see the same `HAPROXY`
-value the mux was started with.
+a signal and not a restart.
+
+That master is also why the mux has a lifetime of its own. It ignores the
+`SIGHUP` that destroying its tmux session sends it - its reload signal is
+`SIGUSR2` and its stop signal is `SIGTERM` - so `down` cannot leave it to
+tmux: it would keep the listen port with no window left to show it. `down`
+stops the master named by the pidfile itself (`SIGTERM`, then `SIGKILL`
+after `MUX_STOP_TIMEOUT` seconds, default 10) and only then drops the
+pidfile with the session. `up` refuses to start when the pidfile already
+names a live master, or when something already listens on the mux port, so
+the failure is one line about the process that is in the way instead of an
+`Address already in use` pane seen after the frpc sidecars have come up
+(exit 3, as for a session that already exists).
+`status` reports the mux from the pidfile rather than from the session,
+which is what makes a master that outlived its session visible; a manual
+recovery from one whose pidfile was lost is
+`kill -TERM "$(pgrep -x haproxy)"`.
+
+`reload`, `down`, `up` and `status` all read that pidfile, check that the
+process it names is HAProxy rather than trusting the file, and refuse
+anything else: a stale pidfile plus a recycled pid would otherwise aim a
+signal at an unrelated process. `down` still removes a pidfile it refuses
+to act on, because dropping it is what lets the next `up` proceed, but it
+exits non-zero then: a mux was not stopped. Since the check compares the
+running process name with the name of the `HAPROXY` binary, `reload` and
+`down` have to see the same `HAPROXY` value the mux was started with.
+
+`status` also prints the TLS binds of the configuration the mux reads, as
+that configuration writes them. That line is where "which certificate is
+being served" is actually answered, and its silence is the failure it
+breaks: reloading after writing a PEM the configuration does not mention
+re-reads the old certificate and reports success, which looks exactly like a
+renewal that worked. `MUX_HAPROXY_CONFIG` says which file to read, so a
+status call can follow an `up --haproxy-config`; without it, the scene's own
+generated configuration is the one reported.
 
 | Local endpoint | Role |
 | --- | --- |
@@ -1045,9 +1073,38 @@ command themselves; if that HAProxy is a master with a pidfile of its own,
 `kill -USR2` on it is the equivalent, and `haproxy -sf` on a pidfile is the
 older form of the same handover.
 
+One run answers for one name, because a token answers for one account: two
+bound names in one account are two runs, and two accounts are two tokens and
+two more. A crontab line is therefore one line per name, and a wrapped
+invocation is not needed for that. It must hold no key - a crontab is not a
+place for a secret, and neither is an argument list - so the key is read
+from a file, and the commands are absolute, because a cron `PATH` is not this
+shell's. The two accounts of this installation are two lines, one token file
+each, and both PEMs are the ones the mux binds (10.1):
+
+```cron
+17 4 * * * /usr/bin/python3 /root/srv/minecraft-asp-server/scripts/sync_natfrp_cert.py --domain <sub>.<account>.nyat.app --out /root/asp-frpcs/tls/<sub>.<account>.nyat.app.pem --token-file /root/asp-frpcs/tokens/<account> --reload-command "/bin/sh /root/srv/minecraft-asp-server/scripts/scenes/frpc-shared-tcp.sh reload" >>/var/log/asp-cert-sync.log 2>&1
+19 4 * * * /usr/bin/python3 /root/srv/minecraft-asp-server/scripts/sync_natfrp_cert.py --domain <sub>.<other-account>.nyat.app --out /root/asp-frpcs/tls/<sub>.<other-account>.nyat.app.pem --token-file /root/asp-frpcs/tokens/<other-account> --reload-command "/bin/sh /root/srv/minecraft-asp-server/scripts/scenes/frpc-shared-tcp.sh reload" >>/var/log/asp-cert-sync.log 2>&1
+```
+
+The two lines overlap by design rather than by accident: a reload re-reads
+the whole configuration, so the reload of either run also takes in whatever
+the other certificate file holds by then. One name renewing two minutes
+before the other is not a reason to order them.
+
+Daily is enough, and often a no-op twice over: a run asks the provider to
+reissue only inside `--renew-window-days` (7) and downloads only when the
+`.created` sidecar says the file is not the certificate the account holds
+now. Nothing needs to be rotated or expired by hand, and a non-zero exit is
+the only signal there is, so the log line is what turns the schedule into
+something that can be noticed.
+
 Exit codes: `0` the file is current or was updated, `1` the API, the
 certificate or a command failed, `2` usage. `--dry-run` reports and
-downloads, and writes nothing.
+downloads, and writes nothing. A failed `--reload-command` is one of the
+`1`s, and deliberately so: the file was written while the running server
+still serves the old certificate, which is a failure even though nothing was
+lost.
 
 Two provider-side facts shape how this has to be run. The first certificate
 for a name is issued when frpc first fetches it with `auto_https` on, so an
