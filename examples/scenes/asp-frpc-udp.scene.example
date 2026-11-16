@@ -1,0 +1,19 @@
+# Example: one official-frpc UDP tunnel and no server window.
+#
+# Copy this outside the repository, replace the paths, then:
+#
+#   scripts/scenes/frpc.sh up --scene <path>/udp.scene --no-attach
+#
+# `session` is the default here, so `down`, `status` and `attach` find it
+# without FRPC_SESSION. A different name needs that variable for those verbs
+# (frpc.sh prints the hint when the scene names one).
+#
+# server = false: this scene only runs the media tunnel. Geyser and the server
+# are started by whatever owns them.
+
+session = asp-frpc
+server = false
+
+[udp]
+binary = /home/operator/asp-frpcs/bin/frpc
+config = /home/operator/asp-frpcs/official-frpc-udp.toml

@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/11-17-natfrp-official-frpc-udp/prd.md","reason":"Check implementation against explicit functional and acceptance requirements."}
+{"file":".trellis/tasks/11-17-natfrp-official-frpc-udp/design.md","reason":"Check parser, lifecycle, shared-TCP composition, and rollback boundaries."}
+{"file":".trellis/tasks/11-17-natfrp-official-frpc-udp/implement.md","reason":"Check that every planned implementation and validation step was completed."}
+{"file":".trellis/tasks/11-17-natfrp-official-frpc-udp/research/official-frpc-udp-spike.md","reason":"Verify the mixed-binary decision and UDP PROXY v2 documentation against the observed result."}
+{"file":".trellis/spec/guides/commit-discipline.md","reason":"Review commit boundaries and ensure examples/docs contain no secrets."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review path resolution, lifecycle ordering, and HAProxy integration consistency."}
+{"file":".trellis/spec/backend/frpc-scenes.md","reason":"Check implementation against the executable frpc scene contract and error matrix."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Apply project quality expectations to shell lifecycle changes and tests."}

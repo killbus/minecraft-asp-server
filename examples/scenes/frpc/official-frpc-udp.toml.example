@@ -1,0 +1,27 @@
+# Example frpc configuration for the NetherNet media plane.
+#
+# The official frpc client forwards UDP PROXY protocol v2; that is what lets
+# Geyser see the real client address and steer every Bedrock client through
+# the relay. The TCP entries keep their provider fork because they need the
+# provider's auto_https and certificates - two different jobs, two processes.
+#
+# Copy outside the repository and replace every placeholder.
+
+serverAddr = "frp.example.net"
+serverPort = 7000
+loginFailExit = false
+
+# Keep account credentials out of Git: this file lives with the operator's
+# configuration, never in the repository.
+auth.method = "token"
+auth.token = "<account-token>"
+
+[[proxies]]
+name = "minecraft-bedrock-media"
+type = "udp"
+localIP = "127.0.0.1"
+localPort = 19132
+# Replace 24001 with the provider-assigned public UDP port.
+remotePort = 24001
+# The provider side has to enable the same setting for this tunnel.
+transport.proxyProtocolVersion = "v2"

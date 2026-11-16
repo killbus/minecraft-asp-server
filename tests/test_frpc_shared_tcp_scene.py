@@ -6,7 +6,9 @@ decision testable on a development machine.
 """
 
 from pathlib import Path
+import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -49,6 +51,24 @@ class SharedTcpSceneTests(unittest.TestCase):
             cwd=ROOT, capture_output=True, text=True,
         )
 
+    def manifest(self, text, name="the.scene"):
+        path = self.configs / name
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        return path
+
+    def run_manifest(self, scene, *arguments):
+        return subprocess.run(
+            [SH, SCENE.as_posix(), "up", "--scene", scene.as_posix(), *arguments],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+
+    def executable(self, directory, name, text):
+        path = directory / name
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
     def config(self, *arguments):
         """Return the generated HAProxy config lines from a dry run."""
         result = self.run_scene("--dry-run", *arguments)
@@ -78,6 +98,92 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertIn(MUX_JAVA, config)
         self.assertIn("    default_backend java", config)
         self.assertNotIn("geyser_tls", "\n".join(config))
+
+    def test_a_scene_and_configs_are_mutually_exclusive(self):
+        scene = self.manifest(
+            "session = asp-frpc-shared\n"
+            "server = true\n"
+            "[udp]\nbinary = frpc\nconfig = frpc.toml\n"
+        )
+
+        result = subprocess.run(
+            [SH, SCENE.as_posix(), "up", "--scene", scene.as_posix(),
+             "--config", self.configs.as_posix(), "--dry-run"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+
+        self.assertEqual(2, result.returncode, result.stdout)
+        self.assertIn("mutually exclusive", result.stderr)
+
+    def test_a_scene_keeps_the_three_sidecars_before_the_server(self):
+        """Two TCP entries and the UDP media tunnel; the server is still last."""
+        for name in ("entry-a.toml", "entry-b.toml", "udp.toml"):
+            (self.configs / name).write_text("# frpc\n", encoding="utf-8")
+        scene = self.manifest(
+            "session = asp-frpc-shared\n"
+            "server = true\n"
+            "\n"
+            "[entry_a]\nbinary = frpc\nconfig = entry-a.toml\n"
+            "[entry_b]\nbinary = frpc\nconfig = entry-b.toml\n"
+            "[udp]\nbinary = frpc\nconfig = udp.toml\n"
+        )
+
+        result = self.run_manifest(scene, "--dry-run")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        output = result.stdout
+        sidecars = [output.index(f"-n frpc-{name}")
+                    for name in ("entry_a", "entry_b", "udp")]
+        mux = output.index("-n mux")
+        server = output.index("bash scripts/start.sh")
+        self.assertEqual(3, len(sidecars), output)
+        self.assertLess(max(sidecars), mux, "every sidecar starts before the mux")
+        self.assertLess(mux, server, "the mux starts before the server")
+        self.assertIn("# server deferred", output)
+
+    def test_an_invalid_scene_keeps_the_parser_exit_status(self):
+        """The wrapper must not turn a manifest error (2) into a runtime error."""
+        stubs = self.directory / "stubs"
+        stubs.mkdir()
+        self.executable(
+            stubs, "tmux",
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "    has-session) exit 1 ;;\n"
+            "esac\n"
+            "exit 0\n",
+        )
+        haproxy = self.executable(stubs, "haproxy", "#!/bin/sh\nexit 0\n")
+        scene = self.manifest(
+            "session = asp-frpc-shared\n"
+            "server = false\n"
+            "[udp]\nbinary = frpc\n"
+        )
+        haproxy_config = self.directory / "haproxy.cfg"
+        haproxy_config.write_text("# test config\n", encoding="utf-8")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+
+        environment = dict(os.environ)
+        environment.update({
+            "PATH": os.pathsep.join([stubs.as_posix(), environment["PATH"]]),
+            "HAPROXY": haproxy.as_posix(),
+            "MUX_PIDFILE": (self.directory / "haproxy.pid").as_posix(),
+        })
+        result = subprocess.run(
+            [
+                SH, SCENE.as_posix(), "up", "--scene", scene.as_posix(),
+                "--haproxy-config", haproxy_config.as_posix(),
+                "--listen", f"127.0.0.1:{port}",
+            ],
+            cwd=ROOT, capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("section [udp] needs a config", result.stderr)
+        self.assertIn("frpc scene failed to start", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_proxy_protocol_accepts_the_header_and_hands_it_to_java(self):
         """R1: only the shared bind and the Java server line move."""

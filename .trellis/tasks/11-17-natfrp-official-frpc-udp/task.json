@@ -1,0 +1,32 @@
+{
+  "id": "natfrp-official-frpc-udp",
+  "name": "natfrp-official-frpc-udp",
+  "title": "Declarative frpc scenes for mixed NATFRP entries",
+  "description": "Add a declarative scene manifest for running multiple frpc processes with per-section binaries and configs, including Sakura TCP entries, official frpc UDP, and optional server startup.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "killbus",
+  "assignee": "killbus",
+  "createdAt": "2026-11-17",
+  "completedAt": null,
+  "branch": "rewrite/main-20261115",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "scripts/scenes/frpc.sh",
+    "scripts/scenes/frpc-shared-tcp.sh",
+    "examples/scenes",
+    "docs/ASP-SOP.md",
+    "tests"
+  ],
+  "notes": "",
+  "meta": {}
+}

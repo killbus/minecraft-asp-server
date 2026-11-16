@@ -1,0 +1,29 @@
+# Example: two TCP entries from different provider accounts plus the official
+# frpc UDP media tunnel, composed behind one local HAProxy mux.
+#
+#   scripts/scenes/frpc-shared-tcp.sh up --scene <path>/shared.scene \
+#       --proxy-protocol --tls-cert <path>/tls/<fqdn>.pem --strict-sni \
+#       --no-attach
+#
+# Each TCP section is both a Java entry and a Bedrock signalling entry: the
+# mux classifies the stream, so no section is "Java only" or "signalling
+# only". Both point at the same local mux port and are separate processes
+# because they use different provider accounts.
+#
+# The UDP section is the media plane. It is separate because it is a
+# different protocol, a different tunnel and a different client binary.
+
+session = asp-frpc-shared
+server = true
+
+[entry_account_a]
+binary = /home/operator/asp-frpcs/bin/provider-frpc
+config = /home/operator/asp-frpcs/entry-account-a.toml
+
+[entry_account_b]
+binary = /home/operator/asp-frpcs/bin/provider-frpc
+config = /home/operator/asp-frpcs/entry-account-b.toml
+
+[udp]
+binary = /home/operator/asp-frpcs/bin/frpc
+config = /home/operator/asp-frpcs/official-frpc-udp.toml

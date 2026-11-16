@@ -9,6 +9,8 @@
 #  Usage:
 #    scripts/scenes/frpc.sh up --config <dir|file> \
 #        [--config <dir|file>]... [--no-attach] [--defer-server] [--dry-run]
+#    scripts/scenes/frpc.sh up --scene <file> \
+#        [--no-attach] [--defer-server] [--dry-run]
 #    scripts/scenes/frpc.sh down
 #    scripts/scenes/frpc.sh status
 #    scripts/scenes/frpc.sh attach
@@ -20,6 +22,25 @@
 #  frpc. A file is used as given whatever it is called. Repeat --config
 #  for more than one input.
 #
+#  --scene reads a small operator-owned manifest instead. It exists for
+#  arrangements --config cannot express: several frpc processes run by
+#  different binaries (a provider fork for the TCP entries, the official
+#  client for a UDP tunnel, whose PROXY v2 header the fork does not
+#  forward) and a scene that owns no server at all. One section is
+#  exactly one frpc process, one configuration and one window:
+#
+#    session = asp-frpc
+#    server = false
+#
+#    [udp]
+#    binary = /root/asp-frpcs/bin/frpc
+#    config = /root/asp-frpcs/official-udp.toml
+#
+#  session and server are required; server is true or false and says
+#  whether this scene owns the server window. A relative binary or config
+#  means "next to the scene file", while a bare binary is a command name
+#  looked up on PATH. --scene and --config are mutually exclusive.
+#
 #  Every sidecar starts in the directory of its own configuration, so the
 #  relative paths inside a configuration (certificates, logs, plugin
 #  files) resolve against the file the operator wrote, not against the
@@ -28,6 +49,9 @@
 #  The server window is started last, after every frpc sidecar has stayed
 #  alive for FRPC_READY_TIMEOUT seconds. --defer-server leaves it as a
 #  placeholder so a composing scene can start other prerequisites first.
+#  A scene that says server = false gets no server window at all: its
+#  first sidecar is the session's initial window, and none of the server
+#  placeholder bookkeeping is created.
 #
 #  Every pane gets a UTF-8 locale, whatever the caller's is: the server
 #  console is UTF-8 and the server transcodes it to the locale it starts
@@ -44,6 +68,10 @@ SERVER_WINDOW=server
 STOP_TIMEOUT=${FRPC_STOP_TIMEOUT:-180}
 READY_TIMEOUT=${FRPC_READY_TIMEOUT:-5}
 FRPC=${FRPC:-frpc}
+# A carriage return, so a scene manifest that was last saved by an editor on
+# another platform is read as the operator meant it and not with a stray
+# character appended to every value.
+CR=$(printf '\r')
 
 # Captured before the C locale below, which belongs to this script alone.
 _caller_locale=${LC_ALL-}
@@ -108,6 +136,7 @@ usage() {
     printf '%s\n' \
         'Usage:' \
         '  scripts/scenes/frpc.sh up --config <dir|file> [--config <dir|file>]... [--no-attach] [--defer-server] [--dry-run]' \
+        '  scripts/scenes/frpc.sh up --scene <file> [--no-attach] [--defer-server] [--dry-run]' \
         '  scripts/scenes/frpc.sh down' \
         '  scripts/scenes/frpc.sh status' \
         '  scripts/scenes/frpc.sh attach' \
@@ -142,21 +171,23 @@ is_config_name() {
     return 1
 }
 
-# Set _sidecar to the command for one configuration: frpc runs with the
-# configuration's own directory as its working directory, because frpc
-# resolves the relative paths inside a configuration (certificates, logs,
-# plugin files) against the working directory. exec leaves frpc as the
+# Set _sidecar to the command for one configuration: the selected frpc runs
+# with the configuration's own directory as its working directory, because
+# frpc resolves the relative paths inside a configuration (certificates,
+# logs, plugin files) against the working directory. exec leaves frpc as the
 # process of the pane, so its exit is what remain-on-exit shows.
-# Uses _frpc_quoted, which the caller sets.
 sidecar_command() {
-    _sc_path=$1
+    _sc_binary=$1
+    _sc_path=$2
     _sc_dir=${_sc_path%/*}
     [ -n "$_sc_dir" ] || _sc_dir=/
+    quote_sh "$_sc_binary"
+    _sc_binary_quoted=$_q_result
     quote_sh "$_sc_path"
     _sc_path_quoted=$_q_result
     quote_sh "$_sc_dir"
     _sc_dir_quoted=$_q_result
-    _sidecar="cd $_sc_dir_quoted && exec $_frpc_quoted -c $_sc_path_quoted"
+    _sidecar="cd $_sc_dir_quoted && exec $_sc_binary_quoted -c $_sc_path_quoted"
 }
 
 # Append one resolved config, rejecting duplicate window names.
@@ -292,10 +323,346 @@ resolve_configs() {
     printf '%s' "$_resolved"
 }
 
+# ---------------------------------------------------------------
+#  Scene manifests (--scene)
+# ---------------------------------------------------------------
+
+# Set _trim_result to $1 without leading or trailing whitespace.
+trim() {
+    _trim_result=$1
+    _trim_result=${_trim_result#"${_trim_result%%[![:space:]]*}"}
+    _trim_result=${_trim_result%"${_trim_result##*[![:space:]]}"}
+}
+
+# Return 0 when $1 contains a control character. The record parser below is
+# line- and tab-delimited, so a value that can introduce another delimiter is
+# a malformed manifest entry, not a path this script can represent safely.
+has_control_chars() {
+    case "$1" in
+        *[[:cntrl:]]*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# Set _q_result to a scene path. A binary that is a bare word stays a command
+# name for PATH to resolve at start; a config that is a bare word is a file
+# next to the scene, because a config is data and not an executable. A value
+# with a slash, and an absolute value, are both filesystem paths.
+scene_path() {
+    _sp_value=$1
+    _sp_kind=$2
+    case "$_sp_value" in
+        /*)
+            _q_result=$_sp_value
+            return 0
+            ;;
+        */*)
+            # A leading "./" is how an operator writes "next to the scene";
+            # drop it so the joined path stays readable. The slash is what
+            # makes this a path, so it is classified before the drop.
+            _sp_rel=${_sp_value#./}
+            _q_result=${_scene_dir%/}/$_sp_rel
+            return 0
+            ;;
+    esac
+    if [ "$_sp_kind" = binary ]; then
+        _q_result=$_sp_value
+        return 0
+    fi
+    _q_result=${_scene_dir%/}/$_sp_value
+    return 0
+}
+
+# Set _q_result to an executable path for a scene binary value, and fail when
+# it names nothing this host can run. A bare word is looked up on PATH here,
+# not at parse time: --dry-run must still work without the binary installed.
+resolve_binary_command() {
+    _rb_value=$1
+    case "$_rb_value" in
+        /*|*/*)
+            if [ ! -f "$_rb_value" ]; then
+                echo "[frpc] ERROR: no such frpc binary: $_rb_value" >&2
+                return 2
+            fi
+            if [ ! -x "$_rb_value" ]; then
+                echo "[frpc] ERROR: frpc binary is not executable: $_rb_value" >&2
+                return 2
+            fi
+            _q_result=$_rb_value
+            return 0
+            ;;
+    esac
+    if ! _rb_path=$(command -v "$_rb_value" 2>/dev/null); then
+        echo "[frpc] ERROR: frpc binary not found (give a path or put it on PATH): $_rb_value" >&2
+        return 2
+    fi
+    _q_result=$_rb_path
+    return 0
+}
+
+# Append the section being read to _resolved once it is complete.
+flush_scene_section() {
+    if [ -z "$_cur_name" ]; then
+        return 0
+    fi
+    if [ "$_cur_has_binary" -ne 1 ]; then
+        echo "[frpc] ERROR: section [$_cur_name] needs a binary" >&2
+        return 2
+    fi
+    if [ "$_cur_has_config" -ne 1 ]; then
+        echo "[frpc] ERROR: section [$_cur_name] needs a config" >&2
+        return 2
+    fi
+    _resolved=$_resolved$_cur_name'	'$_cur_binary'	'$_cur_config'
+'
+    return 0
+}
+
+# Set _scene_session, _scene_server and _resolved from a scene manifest. The
+# manifest is read, never sourced: no substitution, no command, no inline
+# comment. Records are "<section>\t<binary>\t<config>" lines; a binary that
+# is a bare command name is kept as written and resolved on PATH at start.
+parse_scene() {
+    _ps_input=$1
+    case "$_ps_input" in
+        */*)
+            _ps_dir=${_ps_input%/*}
+            [ -n "$_ps_dir" ] || _ps_dir=/
+            ;;
+        *)
+            _ps_dir=.
+            ;;
+    esac
+    if ! _ps_dir=$(CDPATH= cd -- "$_ps_dir" 2>/dev/null && pwd -P); then
+        echo "[frpc] ERROR: cannot resolve the scene directory: $_ps_input" >&2
+        return 2
+    fi
+    _ps_path=${_ps_dir%/}/${_ps_input##*/}
+    if [ ! -f "$_ps_path" ]; then
+        echo "[frpc] ERROR: no such scene file: $_ps_path" >&2
+        return 2
+    fi
+    if [ ! -r "$_ps_path" ]; then
+        echo "[frpc] ERROR: cannot read the scene file: $_ps_path" >&2
+        return 2
+    fi
+    _scene_dir=$_ps_dir
+
+    _scene_session=
+    _scene_server=
+    _have_session=0
+    _have_server=0
+    _resolved=
+    _scene_names='
+'
+    _cur_name=
+    _cur_binary=
+    _cur_config=
+    _cur_has_binary=0
+    _cur_has_config=0
+    _ps_sections=0
+
+    while IFS= read -r _ps_line || [ -n "$_ps_line" ]; do
+        _ps_line=${_ps_line%"$CR"}
+        trim "$_ps_line"
+        _ps_line=$_trim_result
+
+        if [ -z "$_ps_line" ]; then
+            continue
+        fi
+        case "$_ps_line" in
+            \#*)
+                continue
+                ;;
+            \[*\])
+                _ps_name=${_ps_line#\[}
+                _ps_name=${_ps_name%\]}
+                case "$_ps_name" in
+                    ''|*[!A-Za-z0-9_-]*)
+                        echo "[frpc] ERROR: section names use only letters, digits, '_' and '-': $_ps_name" >&2
+                        return 2
+                        ;;
+                esac
+                if ! flush_scene_section; then
+                    return 2
+                fi
+                case "
+$_scene_names
+" in
+                    *"
+$_ps_name
+"*)
+                        echo "[frpc] ERROR: duplicate section [$_ps_name]" >&2
+                        return 2
+                        ;;
+                esac
+                _scene_names=$_scene_names$_ps_name'
+'
+                _cur_name=$_ps_name
+                _cur_binary=
+                _cur_config=
+                _cur_has_binary=0
+                _cur_has_config=0
+                _ps_sections=$((_ps_sections + 1))
+                continue
+                ;;
+        esac
+
+        case "$_ps_line" in
+            *=*)
+                ;;
+            *)
+                echo "[frpc] ERROR: expecting 'key = value' or a [section] line: $_ps_line" >&2
+                return 2
+                ;;
+        esac
+        _ps_key=${_ps_line%%=*}
+        _ps_value=${_ps_line#*=}
+        trim "$_ps_key"
+        _ps_key=$_trim_result
+        trim "$_ps_value"
+        _ps_value=$_trim_result
+        if [ -z "$_ps_key" ]; then
+            echo "[frpc] ERROR: empty key: $_ps_line" >&2
+            return 2
+        fi
+        if [ -z "$_ps_value" ]; then
+            echo "[frpc] ERROR: empty value for '$_ps_key'" >&2
+            return 2
+        fi
+        if has_control_chars "$_ps_value"; then
+            echo "[frpc] ERROR: control characters are not allowed in '$_ps_key' values" >&2
+            return 2
+        fi
+
+        if [ -z "$_cur_name" ]; then
+            # Top-level keys live before the first section. Once a section has
+            # started there is no way back to them, which is what keeps a
+            # mistyped "session" from silently becoming a section key.
+            case "$_ps_key" in
+                session)
+                    if [ "$_have_session" -eq 1 ]; then
+                        echo "[frpc] ERROR: duplicate top-level key 'session'" >&2
+                        return 2
+                    fi
+                    case "$_ps_value" in
+                        ''|*[!A-Za-z0-9_-]*)
+                            echo "[frpc] ERROR: session uses only letters, digits, '_' and '-': $_ps_value" >&2
+                            return 2
+                            ;;
+                    esac
+                    _scene_session=$_ps_value
+                    _have_session=1
+                    ;;
+                server)
+                    if [ "$_have_server" -eq 1 ]; then
+                        echo "[frpc] ERROR: duplicate top-level key 'server'" >&2
+                        return 2
+                    fi
+                    case "$_ps_value" in
+                        true|false)
+                            ;;
+                        *)
+                            echo "[frpc] ERROR: server must be 'true' or 'false': $_ps_value" >&2
+                            return 2
+                            ;;
+                    esac
+                    _scene_server=$_ps_value
+                    _have_server=1
+                    ;;
+                *)
+                    echo "[frpc] ERROR: unknown top-level key '$_ps_key'; top-level keys precede the first section" >&2
+                    return 2
+                    ;;
+            esac
+            continue
+        fi
+
+        case "$_ps_key" in
+            binary)
+                if [ "$_cur_has_binary" -eq 1 ]; then
+                    echo "[frpc] ERROR: duplicate key 'binary' in section [$_cur_name]" >&2
+                    return 2
+                fi
+                scene_path "$_ps_value" binary
+                _cur_binary=$_q_result
+                _cur_has_binary=1
+                ;;
+            config)
+                if [ "$_cur_has_config" -eq 1 ]; then
+                    echo "[frpc] ERROR: duplicate key 'config' in section [$_cur_name]" >&2
+                    return 2
+                fi
+                scene_path "$_ps_value" config
+                _cur_config=$_q_result
+                if [ ! -f "$_cur_config" ]; then
+                    echo "[frpc] ERROR: no such config in section [$_cur_name]: $_cur_config" >&2
+                    return 2
+                fi
+                if [ ! -r "$_cur_config" ]; then
+                    echo "[frpc] ERROR: cannot read config in section [$_cur_name]: $_cur_config" >&2
+                    return 2
+                fi
+                _cur_has_config=1
+                ;;
+            *)
+                echo "[frpc] ERROR: unknown key '$_ps_key' in section [$_cur_name]" >&2
+                return 2
+                ;;
+        esac
+    done < "$_ps_path"
+
+    if ! flush_scene_section; then
+        return 2
+    fi
+    if [ "$_ps_sections" -eq 0 ]; then
+        echo "[frpc] ERROR: the scene declares no sections: $_ps_path" >&2
+        return 2
+    fi
+    if [ "$_have_session" -ne 1 ]; then
+        echo "[frpc] ERROR: the scene needs a top-level session: $_ps_path" >&2
+        return 2
+    fi
+    if [ "$_have_server" -ne 1 ]; then
+        echo "[frpc] ERROR: the scene needs a top-level server: $_ps_path" >&2
+        return 2
+    fi
+    return 0
+}
+
+# Decode one resolved record. Legacy --config records are "<name>\t<config>";
+# scene records are "<name>\t<binary>\t<config>". Both decoders live here so
+# the dry run and the start path cannot drift apart. The mode is explicit:
+# inferring it from a tab in the path would turn a legal legacy config name
+# into a field separator.
+decode_record() {
+    _dr_line=$1
+    _line_bare=${_dr_line%%'	'*}
+    _dr_rest=${_dr_line#*'	'}
+    if [ "${_records_have_binary:-0}" -eq 1 ]; then
+        _line_binary=${_dr_rest%%'	'*}
+        _line_config=${_dr_rest#*'	'}
+    else
+        _line_binary=
+        _line_config=$_dr_rest
+    fi
+}
+
+# Apply the window options every scene window needs. Applied while the window
+# holds a placeholder process, so a command that exits immediately cannot
+# destroy the window before the options land.
+configure_window() {
+    _cw_id=$1
+    if ! tmux set-window-option -t "$_cw_id" remain-on-exit on; then
+        return 1
+    fi
+    tmux set-window-option -t "$_cw_id" monitor-activity on
+}
+
 # Create a window with a placeholder process, apply its window options, then
-# run the real command. Creating the placeholder first avoids a race where a
-# command that exits immediately destroys the window before remain-on-exit
-# can be applied, which makes the following tmux target lookup fail.
+# run the real command.
 spawn_window() {
     _sw_session=$1
     _sw_name=$2
@@ -304,10 +671,7 @@ spawn_window() {
     if ! _sw_id=$(tmux new-window -P -F '#{window_id}' -t "$_sw_session" -n "$_sw_name" -c "$ROOT" -- cat); then
         return 1
     fi
-    if ! tmux set-window-option -t "$_sw_id" remain-on-exit on; then
-        return 1
-    fi
-    if ! tmux set-window-option -t "$_sw_id" monitor-activity on; then
+    if ! configure_window "$_sw_id"; then
         return 1
     fi
     tmux respawn-window -k -t "$_sw_id" "$_sw_command"
@@ -345,9 +709,12 @@ EOF
 cmd_up() {
     _config_inputs=
     _have_config=0
+    _scene_file=
+    _have_scene=0
     _no_attach=0
     _defer_server=0
     _dry_run=0
+    _records_have_binary=0
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -359,6 +726,19 @@ cmd_up() {
                 _config_inputs=$_config_inputs$2'
 '
                 _have_config=1
+                shift 2
+                ;;
+            --scene)
+                if [ "$#" -lt 2 ]; then
+                    echo "[frpc] ERROR: --scene needs one file" >&2
+                    exit 2
+                fi
+                if [ "$_have_scene" -eq 1 ]; then
+                    echo "[frpc] ERROR: --scene may be given only once" >&2
+                    exit 2
+                fi
+                _scene_file=$2
+                _have_scene=1
                 shift 2
                 ;;
             --no-attach)
@@ -381,8 +761,12 @@ cmd_up() {
         esac
     done
 
-    if [ "$_have_config" -eq 0 ]; then
-        echo "[frpc] ERROR: up needs at least one --config <dir|file>" >&2
+    if [ "$_have_scene" -eq 1 ] && [ "$_have_config" -eq 1 ]; then
+        echo "[frpc] ERROR: --scene and --config are mutually exclusive" >&2
+        exit 2
+    fi
+    if [ "$_have_scene" -eq 0 ] && [ "$_have_config" -eq 0 ]; then
+        echo "[frpc] ERROR: up needs --config <dir|file> or --scene <file>" >&2
         exit 2
     fi
     case "$READY_TIMEOUT" in
@@ -392,50 +776,87 @@ cmd_up() {
             ;;
     esac
 
-    _old_ifs=$IFS
-    IFS='
-'
-    set -f
-    set -- $_config_inputs
-    set +f
-    IFS=$_old_ifs
-
-    if _resolved=$(resolve_configs "$@"); then
-        :
+    _want_server=1
+    if [ "$_have_scene" -eq 1 ]; then
+        if ! parse_scene "$_scene_file"; then
+            exit 2
+        fi
+        _records_have_binary=1
+        # FRPC_SESSION stays the composition and test hook: the shared-TCP
+        # wrapper sets it so the session it adds the mux to is the one the
+        # sidecars landed in. Without it the manifest names the session.
+        if [ -z "${FRPC_SESSION:-}" ]; then
+            SESSION=$_scene_session
+            if [ "$SESSION" != asp-frpc ]; then
+                printf '[frpc] scene names session %s; set FRPC_SESSION=%s to reach it with down/status/attach\n' \
+                    "$SESSION" "$SESSION" >&2
+            fi
+        fi
+        if [ "$_scene_server" = false ]; then
+            _want_server=0
+        fi
+        if [ "$_defer_server" -eq 1 ]; then
+            # A composing scene needs the placeholder even when the manifest
+            # says server = false: the wrapper owns the eventual start.
+            _want_server=1
+        fi
     else
-        _resolve_status=$?
-        exit "$_resolve_status"
+        _old_ifs=$IFS
+        IFS='
+'
+        set -f
+        set -- $_config_inputs
+        set +f
+        IFS=$_old_ifs
+
+        if _resolved=$(resolve_configs "$@"); then
+            :
+        else
+            _resolve_status=$?
+            exit "$_resolve_status"
+        fi
     fi
 
     quote_sh "$ROOT"
     _root_quoted=$_q_result
-    quote_sh "$FRPC"
-    _frpc_quoted=$_q_result
     _server_command='bash scripts/start.sh'
 
     if [ "$_dry_run" -eq 1 ]; then
-        printf 'tmux new-session -d -P -F %s -s %s -n %s -c %s -- cat\n' \
-            "'#{window_id}'" "$SESSION" "$SERVER_WINDOW" "$_root_quoted"
-        printf 'tmux set-environment -t %s LC_ALL %s\n' "=$SESSION" "$PANEL_LOCALE"
-        printf 'tmux set-option -s history-limit 50000\n'
-        printf 'tmux set-window-option -t <server-window-id> remain-on-exit on\n'
-        printf 'tmux set-window-option -t <server-window-id> monitor-activity on\n'
-        printf 'tmux set-window-option -t <server-window-id> @asp-server-deferred %s\n' "$_defer_server"
+        # 1 means the next record creates the session as its initial window.
+        _dry_initial=$((1 - _want_server))
+        if [ "$_want_server" -eq 1 ]; then
+            printf 'tmux new-session -d -P -F %s -s %s -n %s -c %s -- cat\n' \
+                "'#{window_id}'" "$SESSION" "$SERVER_WINDOW" "$_root_quoted"
+            printf 'tmux set-environment -t %s LC_ALL %s\n' "=$SESSION" "$PANEL_LOCALE"
+            printf 'tmux set-option -s history-limit 50000\n'
+            printf 'tmux set-window-option -t <server-window-id> remain-on-exit on\n'
+            printf 'tmux set-window-option -t <server-window-id> monitor-activity on\n'
+            printf 'tmux set-window-option -t <server-window-id> @asp-server-deferred %s\n' "$_defer_server"
+        fi
         while IFS= read -r _line; do
             [ -n "$_line" ] || continue
-            _bare=${_line%%'	'*}
-            _path=${_line#*'	'}
-            sidecar_command "$_path"
+            decode_record "$_line"
+            sidecar_command "${_line_binary:-$FRPC}" "$_line_config"
             _sidecar_command=$_sidecar
-            printf 'tmux new-window -P -F %s -t %s -n %s -c %s -- cat\n' \
-                "'#{window_id}'" "=$SESSION" "frpc-$_bare" "$_root_quoted"
+            if [ "$_dry_initial" -eq 1 ]; then
+                _dry_initial=0
+                printf 'tmux new-session -d -P -F %s -s %s -n %s -c %s -- cat\n' \
+                    "'#{window_id}'" "$SESSION" "frpc-$_line_bare" "$_root_quoted"
+                printf 'tmux set-environment -t %s LC_ALL %s\n' "=$SESSION" "$PANEL_LOCALE"
+                printf 'tmux set-option -s history-limit 50000\n'
+            else
+                printf 'tmux new-window -P -F %s -t %s -n %s -c %s -- cat\n' \
+                    "'#{window_id}'" "=$SESSION" "frpc-$_line_bare" "$_root_quoted"
+            fi
             printf 'tmux set-window-option -t <window-id> remain-on-exit on\n'
             printf 'tmux set-window-option -t <window-id> monitor-activity on\n'
             printf 'tmux respawn-window -k -t <window-id> %s\n' "$_sidecar_command"
         done <<EOF
 $_resolved
 EOF
-        if [ "$_defer_server" -eq 1 ]; then
+        if [ "$_want_server" -eq 0 ]; then
+            printf '# server not started: the scene says server = false\n'
+        elif [ "$_defer_server" -eq 1 ]; then
             printf '# server deferred; start it after the other prerequisites are ready\n'
         else
             printf 'tmux set-window-option -t <server-window-id> @asp-server-deferred 0\n'
@@ -448,17 +869,36 @@ EOF
         echo "[frpc] ERROR: tmux not found (install it or add it to PATH)" >&2
         exit 2
     fi
-    if ! command -v "$FRPC" >/dev/null 2>&1; then
-        echo "[frpc] ERROR: frpc not found (set FRPC=/path/to/frpc or put it on PATH)" >&2
-        exit 2
+
+    # Resolve every binary to an absolute path before tmux is touched: the tmux
+    # server may not share this shell's PATH, and a bad section must not leave
+    # half a session behind. A manifest names one binary per section; the
+    # legacy path still has the single FRPC.
+    _frpc_bin=
+    if [ "$_have_scene" -eq 1 ]; then
+        _spawn_records=
+        while IFS= read -r _line; do
+            [ -n "$_line" ] || continue
+            decode_record "$_line"
+            if ! resolve_binary_command "$_line_binary"; then
+                exit 2
+            fi
+            _spawn_records=$_spawn_records$_line_bare'	'$_q_result'	'$_line_config'
+'
+        done <<EOF
+$_resolved
+EOF
+        _resolved=$_spawn_records
+    else
+        if ! command -v "$FRPC" >/dev/null 2>&1; then
+            echo "[frpc] ERROR: frpc not found (set FRPC=/path/to/frpc or put it on PATH)" >&2
+            exit 2
+        fi
+        if ! _frpc_bin=$(command -v "$FRPC"); then
+            echo "[frpc] ERROR: cannot resolve the frpc binary: $FRPC" >&2
+            exit 2
+        fi
     fi
-    # Use an absolute path: the tmux server may not share this shell's PATH.
-    if ! _frpc_bin=$(command -v "$FRPC"); then
-        echo "[frpc] ERROR: cannot resolve the frpc binary: $FRPC" >&2
-        exit 2
-    fi
-    quote_sh "$_frpc_bin"
-    _frpc_quoted=$_q_result
 
     if tmux has-session -t "=$SESSION" 2>/dev/null; then
         if [ "$_no_attach" -eq 1 ]; then
@@ -474,39 +914,64 @@ EOF
         return 0
     fi
 
-    if ! _server_window_id=$(tmux new-session -d -P -F '#{window_id}' -s "$SESSION" -n "$SERVER_WINDOW" -c "$ROOT" -- cat); then
-        echo "[frpc] ERROR: could not create tmux session $SESSION" >&2
-        exit 1
-    fi
-    if ! tmux set-environment -t "=$SESSION" LC_ALL "$PANEL_LOCALE"; then
-        echo "[frpc] ERROR: could not give session $SESSION a UTF-8 locale" >&2
-        exit 1
-    fi
-    if ! tmux set-option -s history-limit 50000; then
-        echo "[frpc] ERROR: could not configure the tmux server" >&2
-        exit 1
-    fi
-    if ! tmux set-window-option -t "$_server_window_id" remain-on-exit on; then
-        echo "[frpc] ERROR: could not configure the server window" >&2
-        exit 1
-    fi
-    if ! tmux set-window-option -t "$_server_window_id" monitor-activity on; then
-        echo "[frpc] ERROR: could not configure the server window" >&2
-        exit 1
-    fi
-    if ! tmux set-window-option -t "$_server_window_id" @asp-server-deferred "$_defer_server"; then
-        echo "[frpc] ERROR: could not mark the server window state" >&2
-        exit 1
+    # A scene without a server has nothing to put in front of its sidecars, so
+    # the first one becomes the session's initial window and the rest are added
+    # to it. With a server window the session exists before any sidecar starts.
+    _session_ready=$_want_server
+    if [ "$_want_server" -eq 1 ]; then
+        if ! _server_window_id=$(tmux new-session -d -P -F '#{window_id}' -s "$SESSION" -n "$SERVER_WINDOW" -c "$ROOT" -- cat); then
+            echo "[frpc] ERROR: could not create tmux session $SESSION" >&2
+            exit 1
+        fi
+        if ! tmux set-environment -t "=$SESSION" LC_ALL "$PANEL_LOCALE"; then
+            echo "[frpc] ERROR: could not give session $SESSION a UTF-8 locale" >&2
+            exit 1
+        fi
+        if ! tmux set-option -s history-limit 50000; then
+            echo "[frpc] ERROR: could not configure the tmux server" >&2
+            exit 1
+        fi
+        if ! configure_window "$_server_window_id"; then
+            echo "[frpc] ERROR: could not configure the server window" >&2
+            exit 1
+        fi
+        if ! tmux set-window-option -t "$_server_window_id" @asp-server-deferred "$_defer_server"; then
+            echo "[frpc] ERROR: could not mark the server window state" >&2
+            exit 1
+        fi
     fi
 
     while IFS= read -r _line; do
         [ -n "$_line" ] || continue
-        _bare=${_line%%'	'*}
-        _path=${_line#*'	'}
-        sidecar_command "$_path"
+        decode_record "$_line"
+        sidecar_command "${_line_binary:-$_frpc_bin}" "$_line_config"
         _sidecar_command=$_sidecar
-        if ! spawn_window "=$SESSION" "frpc-$_bare" "$_sidecar_command"; then
-            echo "[frpc] ERROR: could not create window frpc-$_bare; server not started" >&2
+        if [ "$_session_ready" -eq 0 ]; then
+            _session_ready=1
+            if ! _initial_window_id=$(tmux new-session -d -P -F '#{window_id}' -s "$SESSION" -n "frpc-$_line_bare" -c "$ROOT" -- cat); then
+                echo "[frpc] ERROR: could not create tmux session $SESSION" >&2
+                exit 1
+            fi
+            if ! tmux set-environment -t "=$SESSION" LC_ALL "$PANEL_LOCALE"; then
+                echo "[frpc] ERROR: could not give session $SESSION a UTF-8 locale" >&2
+                exit 1
+            fi
+            if ! tmux set-option -s history-limit 50000; then
+                echo "[frpc] ERROR: could not configure the tmux server" >&2
+                exit 1
+            fi
+            if ! configure_window "$_initial_window_id"; then
+                echo "[frpc] ERROR: could not configure window frpc-$_line_bare" >&2
+                exit 1
+            fi
+            if ! tmux respawn-window -k -t "$_initial_window_id" "$_sidecar_command"; then
+                echo "[frpc] ERROR: could not start window frpc-$_line_bare" >&2
+                exit 1
+            fi
+            continue
+        fi
+        if ! spawn_window "=$SESSION" "frpc-$_line_bare" "$_sidecar_command"; then
+            echo "[frpc] ERROR: could not create window frpc-$_line_bare; server not started" >&2
             return 1
         fi
     done <<EOF
@@ -516,6 +981,19 @@ EOF
     if ! wait_for_sidecars; then
         printf '[frpc] sidecars are not healthy; server not started (session %s left running)\n' "$SESSION" >&2
         return 1
+    fi
+
+    if [ "$_want_server" -eq 0 ]; then
+        printf '[frpc] sidecars ready; no server window in session %s (the scene says server = false)\n' "$SESSION"
+        if [ "$_no_attach" -eq 1 ]; then
+            return 0
+        fi
+        if [ ! -t 0 ]; then
+            printf '[frpc] stdin is not a terminal; session %s left running\n' "$SESSION"
+            return 0
+        fi
+        tmux attach-session -t "=$SESSION"
+        return 0
     fi
 
     if [ "$_defer_server" -eq 1 ]; then
@@ -568,6 +1046,15 @@ cmd_down() {
     fi
     if ! tmux has-session -t "=$SESSION" 2>/dev/null; then
         printf '[frpc] no session %s\n' "$SESSION"
+        return 0
+    fi
+
+    # A scene that said server = false has no server window to send `stop` to;
+    # killing the session is the whole teardown. A composer's deferred window
+    # still exists, so it takes the branch below instead.
+    if ! tmux list-panes -t "=$SESSION:$SERVER_WINDOW" -F '#{pane_dead}' >/dev/null 2>&1; then
+        printf '[frpc] no server window in session %s; killing session\n' "$SESSION"
+        tmux kill-session -t "=$SESSION"
         return 0
     fi
 

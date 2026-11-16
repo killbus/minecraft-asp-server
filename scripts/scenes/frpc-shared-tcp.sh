@@ -3,10 +3,11 @@
 #  ASP frpc shared-TCP scene (POSIX sh, Linux only; not core)
 #
 #  Runs the server, an HAProxy L4 demultiplexer and one frpc
-#  process per configuration in one tmux session. Java Minecraft
-#  TCP and Bedrock NetherNet built-in signalling share one public
-#  TCP port; the Bedrock WebRTC media plane still needs its own
-#  frpc UDP proxy.
+#  process per configuration (or scene section) in one tmux
+#  session. Java Minecraft TCP and Bedrock NetherNet built-in
+#  signalling share one public TCP port; the Bedrock WebRTC media
+#  plane still needs its own UDP tunnel, which the official frpc
+#  client is the verified carrier for.
 #
 #  Start order: frpc sidecars first, HAProxy second (it must bind the
 #  listen port), the Java server last. MUX_READY_TIMEOUT (default 10)
@@ -18,11 +19,22 @@
 #        [--java HOST:PORT] [--bedrock HOST:PORT] \
 #        [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] \
 #        [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]
+#    scripts/scenes/frpc-shared-tcp.sh up --scene <file> \
+#        [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] \
+#        [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] \
+#        [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]
 #    scripts/scenes/frpc-shared-tcp.sh reload
 #    scripts/scenes/frpc-shared-tcp.sh down
 #    scripts/scenes/frpc-shared-tcp.sh status
 #    scripts/scenes/frpc-shared-tcp.sh attach
 #    scripts/scenes/frpc-shared-tcp.sh help
+#
+#  --scene hands the sidecar set to frpc.sh as a scene manifest instead of a
+#  --config list, and is mutually exclusive with --config. The manifest is
+#  where several TCP entries point at this one mux and where the UDP media
+#  tunnel names the official frpc binary; the server window is still deferred
+#  here and started by this script, last, so a manifest that says
+#  server = false still composes with it.
 #
 #  Defaults:
 #    --listen     127.0.0.1:25566
@@ -183,6 +195,7 @@ usage() {
     printf '%s\n' \
         'Usage:' \
         '  scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> [--config <dir|file>]... [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]' \
+        '  scripts/scenes/frpc-shared-tcp.sh up --scene <file> [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]' \
         '  scripts/scenes/frpc-shared-tcp.sh reload' \
         '  scripts/scenes/frpc-shared-tcp.sh down' \
         '  scripts/scenes/frpc-shared-tcp.sh status' \
@@ -685,6 +698,8 @@ stop_mux() {
 cmd_up() {
     _config_inputs=
     _have_config=0
+    _scene_file=
+    _have_scene=0
     _no_attach=0
     _dry_run=0
     _haproxy_config=
@@ -707,6 +722,19 @@ cmd_up() {
                 _config_inputs=$_config_inputs$2'
 '
                 _have_config=1
+                shift 2
+                ;;
+            --scene)
+                if [ "$#" -lt 2 ]; then
+                    echo "[frpc-shared] ERROR: --scene needs one file" >&2
+                    exit 2
+                fi
+                if [ "$_have_scene" -eq 1 ]; then
+                    echo "[frpc-shared] ERROR: --scene may be given only once" >&2
+                    exit 2
+                fi
+                _scene_file=$2
+                _have_scene=1
                 shift 2
                 ;;
             --listen)
@@ -786,8 +814,12 @@ cmd_up() {
         esac
     done
 
-    if [ "$_have_config" -eq 0 ]; then
-        echo "[frpc-shared] ERROR: up needs at least one --config <dir|file>" >&2
+    if [ "$_have_scene" -eq 1 ] && [ "$_have_config" -eq 1 ]; then
+        echo "[frpc-shared] ERROR: --scene and --config are mutually exclusive" >&2
+        exit 2
+    fi
+    if [ "$_have_scene" -eq 0 ] && [ "$_have_config" -eq 0 ]; then
+        echo "[frpc-shared] ERROR: up needs --config <dir|file> or --scene <file>" >&2
         exit 2
     fi
     for _endpoint in "$LISTEN" "$JAVA" "$BEDROCK"; do
@@ -874,15 +906,19 @@ cmd_up() {
     # here: an unquoted expansion of a quoted fragment would pass the literal
     # quotes to frpc instead of removing them.
     set --
-    _old_ifs=$IFS
-    IFS='
+    if [ "$_have_scene" -eq 1 ]; then
+        set -- --scene "$_scene_file"
+    else
+        _old_ifs=$IFS
+        IFS='
 '
-    set -f
-    for _config_path in $_config_inputs; do
-        set -- "$@" --config "$_config_path"
-    done
-    set +f
-    IFS=$_old_ifs
+        set -f
+        for _config_path in $_config_inputs; do
+            set -- "$@" --config "$_config_path"
+        done
+        set +f
+        IFS=$_old_ifs
+    fi
 
     if [ -n "$_haproxy_config" ]; then
         if [ ! -f "$_haproxy_config" ]; then
@@ -1000,9 +1036,12 @@ cmd_up() {
     fi
 
     # 1. Sidecars first. frpc.sh leaves the server window as a placeholder.
-    if ! FRPC_SESSION=$SESSION "$FRPC_SH" up --defer-server --no-attach "$@"; then
+    if FRPC_SESSION=$SESSION "$FRPC_SH" up --defer-server --no-attach "$@"; then
+        :
+    else
+        _sidecar_status=$?
         echo "[frpc-shared] ERROR: frpc scene failed to start" >&2
-        exit 1
+        exit "$_sidecar_status"
     fi
 
     # 2. The demultiplexer must be listening before the Java server starts.

@@ -1,0 +1,27 @@
+# Example TCP entry for the shared HAProxy mux, in the provider fork's INI
+# dialect.
+#
+# localPort is the mux, not the Java server: the same public port then
+# carries Java and Bedrock built-in signalling, and the mux decides which is
+# which. Use a provider fork here only when it is what supplies the
+# provider's auto_https and certificate handling; the UDP media tunnel is a
+# separate process.
+
+[common]
+# Numeric placeholders, so the sample stays valid INI after copying.
+user = 10000
+sakura_mode = true
+login_fail_exit = false
+
+server_addr = frp.example.net
+server_port = 7000
+
+[minecraft_server]
+type = tcp
+# Set this, and --proxy-protocol on the mux scene, or leave both off. A mux
+# that expects a header behind a tunnel that sends none refuses everyone.
+proxy_protocol_version = v2
+local_ip = 127.0.0.1
+local_port = 25566
+# Replace 24000 with the provider-assigned public TCP port.
+remote_port = 24000

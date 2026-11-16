@@ -645,14 +645,56 @@ The verbs are `up`, `down`, `status`, `attach` and `help`.
 letters, digits, `_` and `-` only.
 `FRPC` overrides the `frpc` binary (default: first `frpc` on PATH).
 
-It requires `tmux` and `frpc` on PATH. The script does not read or copy frp
-configuration files: pass each file, or a directory of files, with `--config`.
-Directory inputs expand to that directory's immediate non-hidden regular files
-that are named like frpc configurations (`.ini`, `.toml`, `.yaml`, `.yml`) in
-name order; every other file is reported on stderr as
+It requires `tmux` and an frpc executable. In `--config` mode the executable is
+`FRPC` or the first `frpc` on PATH; in `--scene` mode each section's `binary`
+is authoritative. The script does not read or copy frp configuration files:
+pass each file, or a directory of files, with `--config`. Directory inputs
+expand to that directory's immediate non-hidden regular files that are named
+like frpc configurations (`.ini`, `.toml`, `.yaml`, `.yml`) in name order;
+every other file is reported on stderr as
 `note: ignoring <path>` and left alone, so a certificate, a backup or a note
 may sit beside the configs. A file named explicitly with `--config` is used
 whatever it is called.
+
+`--scene` reads a small operator-owned manifest instead, and is mutually
+exclusive with `--config`. It exists for what a `--config` list cannot say:
+which binary runs which configuration, and whether the scene owns a server at
+all. One section is one frpc process, one configuration and one
+`frpc-<section>` window:
+
+```ini
+session = asp-frpc
+server = false
+
+[udp]
+binary = /home/operator/asp-frpcs/bin/frpc
+config = /home/operator/asp-frpcs/official-frpc-udp.toml
+```
+
+`session` and `server` are required, `server` is exactly `true` or `false`,
+and a scene needs at least one section. A relative `binary` or `config`
+resolves against the *scene file's* directory, never the caller's; a bare
+`binary` is a command name looked up on PATH, while a bare `config` is still a
+file next to the scene. Blank lines and whole-line `#` comments are ignored;
+inline comments are not, so a `#` inside a value is part of that value. The
+parser only reads the file - nothing in a manifest is sourced or evaluated -
+and duplicate keys or sections, unknown keys, empty values, control characters
+and invalid names all exit 2 before tmux is touched. `FRPC_SESSION` still
+overrides `session`, which is how 10.1 aligns the wrapper with the sidecars it
+starts.
+
+`server = false` is the sidecar-only form: the first sidecar becomes the
+session's initial window, and neither a `server` window nor the deferred
+placeholder exists. `down` notices the missing window and kills the session
+instead of sending it `stop`. `down`, `status` and `attach` take no scene
+file, so a manifest that names a session other than the default needs
+`FRPC_SESSION` set for those verbs (`up` prints the hint); a scene that keeps
+`session = asp-frpc` needs nothing.
+
+Several TCP entries are several sections even when they point at the same
+local port, because they may come from different provider accounts and run
+different binaries. Several tunnels that one frpc process owns are several
+`[[proxies]]` in one configuration, and so one section.
 
 Each `frpc-<name>` window runs frpc with the directory of *its own*
 configuration as the working directory, because frpc resolves the relative
@@ -663,6 +705,7 @@ from the repository root.
 
 ```
 scripts/scenes/frpc.sh up --config ~/frp --no-attach
+scripts/scenes/frpc.sh up --scene ~/asp-frpcs/udp.scene --no-attach
 scripts/scenes/frpc.sh status
 scripts/scenes/frpc.sh down
 ```
@@ -677,12 +720,22 @@ failed pane visible; restart with `down` followed by `up`. `down` sends
 (default 180) before removing the session; a session whose server is still
 deferred is killed immediately. `--defer-server` stops after the sidecar
 check and leaves the server window as a placeholder, which is what the
-shared-TCP scene in 10.1 composes with. Use `--dry-run` to print the tmux
-commands without starting anything. Two test files cover all of this
+shared-TCP scene in 10.1 composes with. A manifest that says
+`server = false` creates no server window at all, so its first sidecar is the
+session and the scene simply stays up. Use `--dry-run` to print the tmux
+commands without starting anything. Three test files cover all of this
 without tmux or frpc being installed: `tests/test_frpc_scene_configs.py`
-(which files a `--config` directory contributes) and
+(which files a `--config` directory contributes),
 `tests/test_frpc_scene_spawn.py` (what each window is started with, against
-a stub tmux that records its arguments).
+a stub tmux that records its arguments) and `tests/test_frpc_scene_manifest.py`
+(manifest grammar, path resolution and the server-less lifecycle).
+
+Tracked examples live in `examples/scenes/`: one sidecar-only UDP scene, one
+scene with two TCP entries and the UDP process, and a matching frpc config for
+each side. They are documentation, not deployment assets - every path,
+account field, host name and port is a placeholder, and the configs they name
+do not exist in the repository. Copy one outside the repository and keep the
+real values there.
 
 ### 10.1 Shared TCP entry for Java and Bedrock signalling (Linux only)
 
@@ -703,6 +756,13 @@ that fails leaves the other prerequisites untouched and the server
 unstarted. The sidecar windows inherit the working directory rule of 10:
 each frpc runs in the directory of its own configuration, while HAProxy and
 the server run from the repository root.
+
+`up` takes `--scene FILE` as well as `--config`, mutually exclusive, and
+hands the sidecar set to `frpc.sh` unchanged. That is the arrangement for
+several TCP entries from different provider accounts plus the UDP media
+tunnel: the manifest names one binary per section, and the wrapper still
+defers the server and starts it after the mux, so a manifest that says
+`server = false` composes with it exactly like one that says `true`.
 
 Its verbs are `up`, `reload`, `down`, `status`, `attach` and `help`. The mux
 runs HAProxy in master-worker mode (`-W -db`) with a pidfile
@@ -866,11 +926,11 @@ host name the certificate covers - a raw public IP cannot have a public
 certificate, so the mobile clients that refuse plain HTTP still fail
 against one.
 
-Prerequisites: `tmux`, `frpc` and `haproxy` on PATH
-(`HAPROXY=/path/to/haproxy` and `FRPC=/path/to/frpc` override the
-binaries; both are resolved to absolute paths because the tmux server
-does not have to share the caller's PATH). Run it from the repository
-root:
+Prerequisites: `tmux`, `haproxy`, and an frpc executable. `HAPROXY` overrides
+the mux binary; `FRPC` overrides the frpc binary in `--config` mode; a
+`--scene` section's `binary` is used instead of `FRPC`. Every executable is
+resolved to an absolute path because the tmux server does not have to share
+the caller's PATH. Run it from the repository root:
 
 ```
 sh scripts/scenes/frpc-shared-tcp.sh up --config ~/asp-frpcs --no-attach
@@ -878,25 +938,42 @@ sh scripts/scenes/frpc-shared-tcp.sh status
 sh scripts/scenes/frpc-shared-tcp.sh down
 ```
 
-The frpc side needs two proxies for one public address:
+The frpc side needs two tunnels for one public address, and they are two
+processes: the TCP entry runs under the provider's fork because it needs that
+provider's `auto_https` and certificate, and the UDP media plane runs under
+the official frpc client because only that client was verified to forward UDP
+PROXY protocol v2 (10.1.2). One scene section each:
+
+```ini
+# TCP entry, provider fork: Java + Bedrock built-in signalling -> HAProxy mux
+[common]
+user = 10000                # replace with the provider account id
+server_addr = frp.example.net
+server_port = 8088
+
+[minecraft_tcp]
+type = tcp
+local_ip = 127.0.0.1
+local_port = 25566          # the mux, never the Java server
+remote_port = 24000         # replace with the provider-assigned port
+```
 
 ```toml
-# TCP: Java + Bedrock built-in signalling -> HAProxy mux
-[[proxies]]
-name = "minecraft_tcp"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 25566
-remotePort = <tcp-port>
-
-# UDP: NetherNet media plane -> Geyser (not behind HAProxy; see 10.1.2)
+# UDP media plane, official frpc: -> Geyser (not behind HAProxy; see 10.1.2)
 [[proxies]]
 name = "minecraft_bedrock_media"
 type = "udp"
 localIP = "127.0.0.1"
 localPort = 19132
-remotePort = <udp-port>
+remotePort = 24001          # replace with the provider-assigned UDP port
+transport.proxyProtocolVersion = "v2"
 ```
+
+The two live in different configs, so they are two `--scene` sections with
+different `binary` values; a single config with both `[[proxies]]` is only
+possible when one binary serves both, which is not the case here (and the
+provider fork above uses its INI schema, not the official client's TOML
+schema). Working examples are in `examples/scenes/`.
 
 With that mapping Java is joined at `<public-ip>:<tcp-port>` and the Bedrock
 entry point is the same `<public-ip>:<tcp-port>`; the media plane is reached
@@ -1103,6 +1180,13 @@ line carries no `send-proxy-v2`, and Geyser's NetherNet listeners still
 take a connection without one. `server.properties` already has
 `prevent-proxy-connections=false` and `log-ips=true` on both hosts.
 
+This also means that a listening `25565` socket is not a LAN entry while
+PROXY protocol is on: a vanilla LAN client reaches Paper directly, without
+the header, and is refused. A LAN client has to arrive through a frontend
+that accepts the plain connection and adds `send-proxy-v2` to the Java
+backend (or through the public frpc entry); alternatively turn the whole
+four-part switch off and use `25565` directly.
+
 Acceptance, on the host: a boot/login line `<name>[/<real-public-ip>:
 <port>] logged in with entity id ...` where the address is the player's,
 not `127.0.0.1`. Roll back by dropping `--proxy-protocol` from the scene
@@ -1135,8 +1219,18 @@ Once the relay is listed the SDP answer names only the relays, so every
 Bedrock client is steered through them - including one on the server's own
 LAN, which is the point and also the cost. The media port then stops
 accepting a headerless connection, and TURN servers cannot work behind
-these relays, so nothing but the relay reaches the media plane. NATFRP's
-UDP tunnels need v2 (v1 is not an option) and frpc >= `0.42.0-sakura-4`.
+these relays, so nothing but the relay reaches the media plane.
+
+The UDP tunnel needs v2 - v1 is not an option - and the client has to put
+that header *in front of a datagram*, which the provider fork does not do
+for UDP. The official frpc client does: `0.72.0` was verified against a live
+tunnel, where a plain 19-byte UDP payload arrived as one datagram of the 28
+byte PROXY v2 header plus that payload, with the request-side address in it.
+On the local side the header and the payload may arrive as two datagrams;
+both shapes are the same tunnel. That is why the media plane runs under its
+own official-frpc process while the TCP entries keep the fork for
+`auto_https` and certificates - the manifest of 10.1 names a binary per
+section precisely so one scene can hold both.
 
 What the operator then sees: the address Paper logs for a Bedrock player
 becomes the address the relay saw. For a client on the server's own LAN
@@ -1164,6 +1258,16 @@ settings themselves, including the signalling modes, see 4.2.
 
 `advanced.bedrock.prefer-signaling-proxy-address` is a different lever: it
 moves the signalling-side address only, and is not part of this chain.
+
+`scripts/probe_public_udp.py` answers the narrow question without any
+Minecraft traffic at all: run `listen --bind 127.0.0.1:19132` on the host that
+owns the frpc process, `send --host <node> --port <udp-port>` one datagram
+from another machine, and it prints whether a PROXY v2 header arrived, the
+request-side address it carried, and the payload behind it. It needs no
+server, no Geyser and no scene, and nothing starts it for you - it is an
+operator diagnostic. It cannot say whether Geyser accepts the header or which
+ICE path a real client picked; those still need a Bedrock client and the
+Geyser log lines above.
 
 ### 10.2 Keeping the certificate for the shared port current (Linux only)
 

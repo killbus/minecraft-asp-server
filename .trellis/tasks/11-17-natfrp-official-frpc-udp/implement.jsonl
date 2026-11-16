@@ -1,0 +1,9 @@
+{"file":".trellis/tasks/11-17-natfrp-official-frpc-udp/prd.md","reason":"Requirements and acceptance criteria for declarative frpc scenes and mixed NATFRP entries."}
+{"file":".trellis/tasks/11-17-natfrp-official-frpc-udp/design.md","reason":"Manifest grammar, lifecycle, path resolution, compatibility, and shared-TCP integration design."}
+{"file":".trellis/tasks/11-17-natfrp-official-frpc-udp/implement.md","reason":"Ordered implementation and validation plan."}
+{"file":".trellis/tasks/11-17-natfrp-official-frpc-udp/research/official-frpc-udp-spike.md","reason":"Verified official frpc UDP PROXY v2 behavior and the decision to split binaries by process."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Extend the existing frpc scene parser and lifecycle instead of duplicating frpc wrappers."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Keep manifest paths, tmux lifecycle, HAProxy composition, and Geyser transport roles aligned."}
+{"file":".trellis/spec/backend/frpc-scenes.md","reason":"Executable contract for scene parsing, lifecycle, transport roles, validation, and tests."}
+{"file":".trellis/spec/guides/commit-discipline.md","reason":"Keep parser, wrapper, examples, docs, and tests in coherent commit boundaries."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Apply project quality expectations to POSIX shell changes and regression tests."}
