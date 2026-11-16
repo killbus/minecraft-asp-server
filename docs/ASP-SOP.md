@@ -141,6 +141,7 @@ Plugin roles (exact installed versions, paths and hashes live in
 | SkinsRestorer | runs in Floodgate Mode while Floodgate is present |
 | CoreProtect | block logging and rollback; local file is CE-named |
 | GrimAC | anti-cheat |
+| LoginTo (fork) | offline Java accounts, `/register` + `/login`; see 4.3 |
 
 Download endpoints:
 
@@ -351,6 +352,54 @@ P-384 machine key, the saved registration/challenge and
 Diagnostics: `advanced.bedrock.nethernet-debug: true` for request-level
 logs, and `/geyser nethernet status`, `/geyser nethernet diagnostics` or
 `/geyser nethernet advertised` from the console.
+
+### 4.3 LoginTo (offline Java accounts)
+
+This backend runs `online-mode=false`, so a Java name by itself proves
+nothing. LoginTo gives Java players `/register` and `/login` and keeps one
+password row per UUID in `plugins/LoginTo/_pluginData/database.db` (its
+`cache.db` beside it only holds the name lookup the fork no longer does;
+`rockyou.txt.gz` is the common-password list). Bedrock players are
+not part of that flow: Floodgate already identifies them (name prefix `.`,
+UUID namespace `00000000-0000-0000-0009-`) and LoginTo auto-registers them
+on first join, so they never see a password prompt.
+
+Upstream LoginTo decides whether a name is "premium" by forcing an
+encryption handshake and then asking Mojang `hasJoined`. On an offline
+backend that handshake is the failure mode: a launcher without a Mojang
+session cannot fetch the profile key pair the handshake needs, so it drops
+the connection and the player only sees `Failed to log in: Invalid
+session`. The build used here is a fork of upstream that drops the
+handshake, so every non-Bedrock player is authenticated as cracked, the
+way a name-only offline server behaves.
+
+Account rules, which follow from how the offline UUID is derived:
+
+- The account key is the player name, exactly and case-sensitively. The
+  UUID is the offline UUID of that name, so `Snorlax` and `snorlax` are two
+  accounts, and the same name typed on a second device is the same account
+  with the same password.
+- A name that Mojang has issued still belongs to that name here, and the
+  first player to reach a free name owns it. It is not held back for the
+  Mojang account holder, and no name is reserved.
+- There is no rename or migration path. A player who changes their name
+  gets a fresh empty account and registers again; the old row keeps the old
+  name and password.
+- `/unregister <player>` (operator only) is the only way to free a name. It
+  deletes that account and its password.
+- `/premium` and `/cracked` exist only for a Mojang-linked flow, so they
+  stay disabled while `settings.premium.enabled: false`. The flag no longer
+  gates authentication at all; it only toggles those two commands.
+
+Baseline `plugins/LoginTo/config.yml` on this server:
+
+- `settings.premium.enabled: false`, `settings.premium.auto-register: true`
+  (Bedrock players only - see the fork notes above).
+- `settings.sessions.enabled: false`. Session reuse is keyed on the
+  recorded IP, and both frpc entries in section 10 arrive as `127.0.0.1`,
+  so sessions would log in every player after the first one.
+- `settings.password.authentication-timeout: 0`, so a slow typist is not
+  kicked while registering. `max-login-attempts` still applies.
 
 ## 5. Acceptance checklist (production gate)
 
