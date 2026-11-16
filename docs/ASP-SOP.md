@@ -311,20 +311,26 @@ Two signalling arrangements exist:
   only one public TCP port is available, 10.1 shares it between Java and
   this signalling listener with HAProxy.
 
-`bedrock.signaling.advertise-addresses` must hold the numeric public IP
-and external UDP port that really reaches the NetherNet listener (for
-example `<frp-public-ip>:<udp-port>`), never a host name:
+`bedrock.signaling.advertise-addresses` holds the public endpoint that
+really reaches the NetherNet media listener - the frp entry and the
+external UDP port (`"<entry>:<udp-port>"`). It may be written as a numeric
+address or as a host name; this deployment uses the host name, and the
+address it resolves to is what players get:
 
-- a host name is resolved on the server at startup, so a fake-IP resolver
-  (common with proxy/VPN DNS modes) turns it into `198.18.0.0/15` and
-  Geyser refuses to start signalling with `Advertised address <ip> is
-  special purpose, no player can reach it`;
+- the name is looked up here, when signalling starts, and every address
+  it resolves to gets the same usable-address check a literal entry gets:
+  a fake-IP resolver (common with proxy/VPN fake-IP modes) answers
+  `198.18.0.0/15` and Geyser refuses to start signalling with
+  `Advertised address <ip> is special purpose, no player can reach it`;
 - `advanced.nxs.connection-checks` (on by default) has the service probe
-  the advertised address from several regions, so the value must be the
-  real public endpoint rather than whatever this machine's DNS returned;
-- when a host name is used the boot log prints `Advertised address <name>
-  resolves to <ips>` - the fastest way to see what was actually
-  advertised.
+  the advertised address from several regions, so the resolved value has
+  to be the real public endpoint;
+- the boot log prints `Advertised address <name> resolves to <ips>`, the
+  fastest way to see what was actually advertised.
+
+A name buys nothing a player can use - it never leaves this machine, and
+the candidates in the answer are addresses - so it is safe exactly as long
+as this machine's resolver keeps returning the node's real public address.
 
 `advanced.bedrock.webrtc-proxy-protocol-relays`, with
 `advertise-addresses` naming the relays, is the media-plane real-address
@@ -421,10 +427,10 @@ Baseline `plugins/LoginTo/config.yml` on this server:
       at ...` line, or the built-in signalling TCP port (see 4.2). A
       client pointed at UDP 19132 or at 25565 fails with no server-side
       connection record
-- [ ] `bedrock.signaling.advertise-addresses` holds the numeric public IP
-      and external UDP port of the NetherNet listener (never a host name),
-      and the boot log shows enabled signalling plus the registration
-      line above
+- [ ] `bedrock.signaling.advertise-addresses` names the public entry and
+      external UDP port of the NetherNet listener (here: a host name, see
+      4.2), and the boot log shows enabled signalling plus the
+      registration line above
 - [ ] `stop` exits cleanly; second cold start reaches `Done` quickly
       (no migration/patch phase)
 - [ ] Data dirs are in the backup set: `world/` + whitelist/ban/usercache,
@@ -523,8 +529,8 @@ Baseline `plugins/LoginTo/config.yml` on this server:
 - Without ViaVersion, Geyser on 26.2 warns that it targets a newer Java
   protocol (26.3); installing ViaVersion removes the warning.
 - Bedrock players cannot join at all until NetherNet signalling works;
-  see 4.2 for the entry points, the numeric advertise-address rule and
-  the stale `nethernet/` identity failure.
+  see 4.2 for the entry points, the advertise-address rule and the stale
+  `nethernet/` identity failure.
 - The SWP install doc page
   (https://infernalsuite.com/docs/asp/swp/installation) only says
   "download from our Discord" without a link (page defect); the correct
@@ -894,8 +900,8 @@ remotePort = <udp-port>
 
 With that mapping Java is joined at `<public-ip>:<tcp-port>` and the Bedrock
 entry point is the same `<public-ip>:<tcp-port>`; the media plane is reached
-through `bedrock.signaling.advertise-addresses`, which keeps the numeric
-public IP and the UDP remote port (`"<public-ip>:<udp-port>"`, see 4.2).
+through `bedrock.signaling.advertise-addresses`, which names the public
+entry and the UDP remote port (`"<entry>:<udp-port>"`, see 4.2).
 
 `bedrock.signaling.mode` decides what the Geyser backend serves:
 `builtin` binds the TCP signalling listener that HAProxy forwards to and
@@ -1121,7 +1127,7 @@ disagree:
 | Where | Setting |
 | --- | --- |
 | frpc, the UDP tunnel in front of the media port | `proxy_protocol_version = v2` in that tunnel block (the INI form; a TOML config spells it `transport.proxyProtocolVersion = "v2"`) |
-| Geyser | `bedrock.signaling.advertise-addresses` names the relay: the frp node's numeric public address together with the media port, replacing the host name that field holds here |
+| Geyser | `bedrock.signaling.advertise-addresses` names the relay: the frp entry and the media port; a host name is fine here, since Geyser resolves it when signalling starts |
 | Geyser | `advanced.bedrock.webrtc-proxy-protocol-relays: [<that address>]` |
 | Geyser (already so) | `bedrock.webrtc-port: 0` puts the media port on `bedrock.port` (19132), which is the fixed ICE port the relay code requires |
 
@@ -1146,11 +1152,14 @@ Roll back by removing the relay from `webrtc-proxy-protocol-relays` and
 clearing `proxy_protocol_version` on the UDP tunnel; the direct path
 returns for everyone.
 
-Recorded, not a gate: the relay address should be numeric rather than a
-host name, because it has to be the node that actually forwards to this
-tunnel; the fake-IP history and the absence of multi-node today are already
-settled, so this stays a note. For the entry-point settings themselves,
-including `advertise-addresses` and the signalling modes, see 4.2.
+The entry named there has to be the node that actually forwards to this
+tunnel, and either spelling works: this deployment uses the host name,
+which Geyser resolves when signalling starts, and an entry in
+`webrtc-proxy-protocol-relays` is resolved the same way before it becomes
+an address range. Both are therefore only as good as this machine's
+resolver - 4.2 has the fake-IP failure and the log line that shows what
+was advertised. For the entry-point settings themselves, including the
+signalling modes, see 4.2.
 
 `advanced.bedrock.prefer-signaling-proxy-address` is a different lever: it
 moves the signalling-side address only, and is not part of this chain.
