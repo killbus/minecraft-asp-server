@@ -95,6 +95,15 @@ class CountingServer(socketserver.ThreadingTCPServer):
         with self.lock:
             self.connections += 1
 
+    def handle_error(self, request, client_address):
+        # The harness's own probes and the raw TLS ClientHello bytes it sends
+        # to the signalling stand-in go away mid-read, and socketserver would
+        # print a traceback for each reset - noise that would bury a real
+        # connection failure. Everything else keeps the default traceback.
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
 
 class JavaHandler(socketserver.BaseRequestHandler):
     def handle(self):
