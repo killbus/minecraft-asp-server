@@ -92,3 +92,44 @@ Shipped the opt-in PROXY-protocol chain for the shared-port mux: --proxy-protoco
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: Bedrock media relay: SOP subsection 10.1.2
+<!-- trellis-session: v=2 fp=cea156e8fd9f6ba3 -->
+
+**Date**: 2026-11-16
+**Task**: Bedrock media relay: SOP subsection 10.1.2
+**Branch**: `rewrite/main-20261115`
+
+### Summary
+
+Closed the Bedrock-real-IP task: research proved the reported address is the selected ICE media path (port 0 is Geyser's own literal), and the operator-side relay chain is now documented in the SOP instead of left in chat.
+
+### Main Changes
+
+- docs/ASP-SOP.md: new subsection 10.1.2 forcing Bedrock media through the frpc UDP relay (proxy_protocol_version = v2, advertise-addresses, webrtc-proxy-protocol-relays, webrtc-port: 0), plus cross-refs in 4.2 and the 10.1 frpc example comment.
+- docs/ASP-SOP.md: 10.1.1 and 10.1.2 moved to the end of 10.1 so the section tail (dry-run, smoke test, probe, auto_https, plain_website_check) reads as 10.1 body again; pure move, line multiset unchanged.
+- Deployment specifics genericized in the new text: no concrete player name, LAN address or provider host name.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `30d56d4` | docs(bedrock): research the NetherNet player address and its switches |
+| `acfdb66` | docs(sop): document the Bedrock media relay chain |
+| `e1b1179` | chore(task): archive 11-16-bedrock-real-ip |
+
+### Testing
+
+- [OK] python .trellis/scripts/task.py validate .trellis/tasks/11-16-bedrock-real-ip (4 implement + 3 check entries; only the pre-existing SOP size warning)
+- [OK] trellis-check sub-agent on the docs diff: heading order, byte-identical relocation of 10.1.1, claim-by-claim traceability to the research files, ASCII/trailing whitespace/newline, scope - no blocking findings
+- [OK] git diff --check -- docs/ASP-SOP.md clean
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Host acceptance not yet run: set proxy_protocol_version = v2 on the UDP tunnel, point advertise-addresses at the frp node's numeric public IP and list it in webrtc-proxy-protocol-relays, then confirm the Bedrock login line shows the public address.
+- Open question from the task: Geyser config.yml auth-type (online vs offline + Floodgate).
