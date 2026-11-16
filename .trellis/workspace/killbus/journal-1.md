@@ -133,3 +133,41 @@ Closed the Bedrock-real-IP task: research proved the reported address is the sel
 
 - Host acceptance not yet run: set proxy_protocol_version = v2 on the UDP tunnel, point advertise-addresses at the frp node's numeric public IP and list it in webrtc-proxy-protocol-relays, then confirm the Bedrock login line shows the public address.
 - Open question from the task: Geyser config.yml auth-type (online vs offline + Floodgate).
+
+
+## Session 5: SOP: advertise-addresses may be a host name
+<!-- trellis-session: v=2 fp=93884d6a19eda89a -->
+
+**Date**: 2026-11-16
+**Task**: SOP: advertise-addresses may be a host name
+**Branch**: `rewrite/main-20261115`
+
+### Summary
+
+Recorded the operator decision to write bedrock.signaling.advertise-addresses as a host name, and replaced the earlier 'numeric only' rule with what the code actually does: the name is resolved here at signalling start and every resolved address must pass the usable-address check.
+
+### Main Changes
+
+- docs/ASP-SOP.md: 4.2 now states the rule (numeric or host name; this deployment uses the name), the fake-IP refusal, and the Advertised address ... resolves to ... log line as the value actually advertised.
+- docs/ASP-SOP.md: section 5 acceptance item, the section 7 pointer, the 10.1 mapping example, the 10.1.2 settings table and its closing note no longer say numeric only.
+- docs/ASP-SOP.md: 10.1.2 notes that webrtc-proxy-protocol-relays resolves names the same way (TrustedProxies.parse -> IpRangeSet.parse -> InetAddress.getAllByName), so both fields depend on this machine's resolver.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9c8c3ba` | docs(sop): record the host-name advertise-address policy |
+
+### Testing
+
+- [OK] AdvertisedAddresses / TrustedProxies / IpRangeSet disassembled from server/plugins/Geyser-Spigot.jar to confirm the resolve-then-validate path and name handling
+- [OK] docs/ASP-SOP.md ASCII, no trailing whitespace, no CR, body lines within the file's wrap
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- server/plugins/Geyser-Spigot/config.yml:54-56 still carries the local never-a-host-name NOTE and is not in the repo; decide whether to rewrite it here or on the host.
+- Host acceptance of the relay chain is still outstanding (UDP tunnel proxy_protocol_version = v2, webrtc-proxy-protocol-relays, then check the Bedrock login line).

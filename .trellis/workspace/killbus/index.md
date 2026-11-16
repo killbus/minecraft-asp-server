@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 4
+- **Total Sessions**: 5
 - **Last Active**: 2026-11-16
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~135 | Active |
+| `journal-1.md` | ~173 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 5 | 2026-11-16 | SOP: advertise-addresses may be a host name | `9c8c3ba` | `rewrite/main-20261115` |
 | 4 | 2026-11-16 | Bedrock media relay: SOP subsection 10.1.2 | `30d56d4`, `acfdb66`, `e1b1179` | `rewrite/main-20261115` |
 | 3 | 2026-11-16 | Opt-in PROXY protocol v2 on the frpc shared-port mux | `f2f2530`, `f38b748`, `1121dd1`, `245ca88` | `rewrite/main-20261115` |
 | 2 | 2026-11-14 | NetherNet/Terracotta root cause and SOP 4.2 | `fda2c49` | `main` |
