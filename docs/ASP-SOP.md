@@ -333,8 +333,8 @@ the candidates in the answer are addresses - so it is safe exactly as long
 as this machine's resolver keeps returning the node's real public address.
 
 `advanced.bedrock.webrtc-proxy-protocol-relays`, with
-`advertise-addresses` naming the relays, is the media-plane real-address
-chain of 10.1.2.
+`advertise-addresses` naming the public entry players are given, is the
+media-plane real-address chain of 10.1.2.
 
 `plugins/Geyser-Spigot/nethernet/` is instance identity, not cache: the
 P-384 machine key, the saved registration/challenge and
@@ -1128,7 +1128,7 @@ disagree:
 | --- | --- |
 | frpc, the UDP tunnel in front of the media port | `proxy_protocol_version = v2` in that tunnel block (the INI form; a TOML config spells it `transport.proxyProtocolVersion = "v2"`) |
 | Geyser | `bedrock.signaling.advertise-addresses` names the relay: the frp entry and the media port; a host name is fine here, since Geyser resolves it when signalling starts |
-| Geyser | `advanced.bedrock.webrtc-proxy-protocol-relays: [<that address>]` |
+| Geyser | `advanced.bedrock.webrtc-proxy-protocol-relays: ["127.0.0.1"]` - the sender as this machine sees it, not the public node; addresses, subnets or a link to a plain-text list |
 | Geyser (already so) | `bedrock.webrtc-port: 0` puts the media port on `bedrock.port` (19132), which is the fixed ICE port the relay code requires |
 
 Once the relay is listed the SDP answer names only the relays, so every
@@ -1152,14 +1152,15 @@ Roll back by removing the relay from `webrtc-proxy-protocol-relays` and
 clearing `proxy_protocol_version` on the UDP tunnel; the direct path
 returns for everyone.
 
-The entry named there has to be the node that actually forwards to this
-tunnel, and either spelling works: this deployment uses the host name,
-which Geyser resolves when signalling starts, and an entry in
-`webrtc-proxy-protocol-relays` is resolved the same way before it becomes
-an address range. Both are therefore only as good as this machine's
-resolver - 4.2 has the fake-IP failure and the log line that shows what
-was advertised. For the entry-point settings themselves, including the
-signalling modes, see 4.2.
+Two addresses answer two different questions. `advertise-addresses` is
+what a player is told to reach, so it is the public entry and may be a
+host name. `webrtc-proxy-protocol-relays` is who may claim to be the
+sender on the media port, so it is that sender as this machine sees it -
+with frpc forwarding to `127.0.0.1:19132` it is `127.0.0.1`, and the
+node's public address would never match. It is also the one field that
+stays numeric: addresses, subnets or a link to a plain-text list are the
+documented forms, so a host name is not one of them. For the entry-point
+settings themselves, including the signalling modes, see 4.2.
 
 `advanced.bedrock.prefer-signaling-proxy-address` is a different lever: it
 moves the signalling-side address only, and is not part of this chain.
