@@ -23,6 +23,8 @@ FAKE_PEM = (
 CERT_ONLY_PEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
 MUX_BEDROCK = "    server geyser 127.0.0.1:19132"
 MUX_JAVA = "    server paper 127.0.0.1:25565"
+MUX_LISTEN_PLAIN = "    bind 127.0.0.1:25566"
+MUX_JAVA_PROXY = "    server paper 127.0.0.1:25565 send-proxy-v2"
 
 
 @unittest.skipIf(SH is None, "POSIX sh is not available")
@@ -76,6 +78,59 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertIn(MUX_JAVA, config)
         self.assertIn("    default_backend java", config)
         self.assertNotIn("geyser_tls", "\n".join(config))
+
+    def test_proxy_protocol_accepts_the_header_and_hands_it_to_java(self):
+        """R1: only the shared bind and the Java server line move."""
+        config = self.config("--proxy-protocol")
+
+        self.assertIn("    bind 127.0.0.1:25566 accept-proxy", config)
+        self.assertIn(MUX_JAVA_PROXY, config)
+        # The demux still classifies the same way, and the plain bind and the
+        # signalling backend are untouched: the header is consumed by HAProxy
+        # before tcp-request content, so the sniffing sees the real payload.
+        self.assertNotIn(MUX_LISTEN_PLAIN, config)
+        self.assertIn("    use_backend geyser_signaling if is_tls or is_http", config)
+        self.assertIn(MUX_BEDROCK, config)
+        moved = [
+            line for line in config
+            if ("accept-proxy" in line or "send-proxy-v2" in line)
+        ]
+        self.assertEqual(
+            ["    bind 127.0.0.1:25566 accept-proxy", MUX_JAVA_PROXY], moved,
+        )
+
+    def test_proxy_protocol_with_a_certificate_still_terminates_tls(self):
+        certificate = self.pem("certs/site.pem")
+
+        config = self.config("--proxy-protocol", "--tls-cert", certificate.as_posix())
+
+        # The switch is independent of TLS termination: the terminating bind
+        # carries no header of its own (it is HAProxy talking to HAProxy on
+        # loopback) and the signalling split is unchanged.
+        self.assertIn("    bind 127.0.0.1:25566 accept-proxy", config)
+        self.assertIn(MUX_JAVA_PROXY, config)
+        self.assertIn("    use_backend geyser_tls if is_tls", config)
+        self.assertIn("    use_backend geyser_signaling if is_http", config)
+        listener = [line for line in config if line.startswith("    bind 127.0.0.1:25567 ssl crt ")]
+        self.assertEqual(1, len(listener), config)
+        self.assertNotIn("accept-proxy", listener[0])
+
+    def test_proxy_protocol_takes_no_value(self):
+        # The switch is boolean: `--proxy-protocol=x` is not it, and the
+        # unknown-option path refuses it before anything is started.
+        for value in ["--proxy-protocol=x", "--proxy-protocol=true"]:
+            with self.subTest(value=value):
+                errors = self.assert_rejected(value)
+                self.assertIn("unknown up option", errors)
+                self.assertIn(value, errors)
+
+    def test_proxy_protocol_cannot_swallow_the_next_option(self):
+        # The switch may be placed anywhere among the others: it never
+        # consumes the option that follows it.
+        config = self.config("--proxy-protocol", "--java", "127.0.0.1:25570")
+
+        self.assertIn("    bind 127.0.0.1:25566 accept-proxy", config)
+        self.assertIn("    server paper 127.0.0.1:25570 send-proxy-v2", config)
 
     def test_plain_config_is_unchanged(self):
         self.assertEqual(

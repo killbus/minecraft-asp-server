@@ -19,6 +19,12 @@ that share it start differently:
      "the path is broken", "nothing answers inside TLS" and "the
      certificate is untrusted" cannot be confused.
 
+`--local-mux HOST:PORT` repeats the Java and HTTP probes against a local
+mux for comparison. With `--proxy-protocol` those two connections start
+with a PROXY protocol v2 header, which is what a mux started with the
+scene's `--proxy-protocol` requires; the public half is left alone,
+because there frpc, not the client, writes the header.
+
 Exit codes: 0 the Minecraft probe reached a server, 1 it did not, 2 bad
 usage.
 """
@@ -27,6 +33,7 @@ import argparse
 import ipaddress
 import socket
 import ssl
+import struct
 import sys
 import time
 
@@ -37,6 +44,15 @@ HTTP_REQUEST = "GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
 # Chinese nodes ("please have the datacenter whitelist your domain").
 EDGE_MARKERS = (b"0632idc.com", b"/sorry.png", b"is not allowed", b"ICP")
 EDGE_TITLE = b"<title>"
+
+# PROXY protocol version 2: the 12-byte signature,
+# then version/command, family/protocol, a 16-bit length, and the address
+# block that length counts. frpc writes this header ahead of every connection
+# it opens once the tunnel sets proxy_protocol_version, and a mux bind with
+# `accept-proxy` refuses a connection that does not start with it.
+PROXY_V2_SIGNATURE = b"\r\n\r\n\x00\r\nQUIT\n"
+PROXY_V2_VERSION_COMMAND = 0x21  # version 2, PROXY (a connection, not LOCAL)
+PROXY_V2_FAMILY_PROTOCOL = 0x11  # AF_INET over STREAM
 
 
 def resolve(host):
@@ -54,6 +70,29 @@ def fake_ip(addresses):
         except ValueError:
             continue
     return False
+
+
+def proxy_v2_header(source, destination):
+    """A PROXY protocol v2 header for one TCP/IPv4 connection.
+
+    The shape frpc sends when a tunnel sets `proxy_protocol_version = "v2"`:
+    12 signature bytes, version/command, family/protocol, the length of the
+    address block, then the IPv4 addresses and ports. The checksum kwarg is
+    left off, which is legal and what HAProxy's `accept-proxy` reads.
+    """
+    source_host, source_port = source
+    destination_host, destination_port = destination
+    addresses = (
+        socket.inet_aton(source_host)
+        + socket.inet_aton(destination_host)
+        + struct.pack("!HH", source_port, destination_port)
+    )
+    return (
+        PROXY_V2_SIGNATURE
+        + bytes([PROXY_V2_VERSION_COMMAND, PROXY_V2_FAMILY_PROTOCOL])
+        + struct.pack("!H", len(addresses))
+        + addresses
+    )
 
 
 def request_over(connection, payload, read=4096):
@@ -131,6 +170,14 @@ def main(argv):
     parser.add_argument(
         "--local-mux", help="also probe this local mux HOST:PORT, for comparison",
     )
+    parser.add_argument(
+        "--proxy-protocol", action="store_true",
+        help=(
+            "prefix the --local-mux connections with a PROXY protocol v2 "
+            "header, for a mux started with --proxy-protocol; the public half "
+            "is unaffected (frpc adds that header there)"
+        ),
+    )
     arguments = parser.parse_args(argv)
 
     addresses = resolve(arguments.host)
@@ -179,15 +226,31 @@ def main(argv):
         print(f"tls-     {'TRUSTED' if trusted else 'UNTRUSTED':<8} {reason}")
 
     if arguments.local_mux:
-        local_host, _, local_port = arguments.local_mux.partition(":")
+        local_host, _, local_port_text = arguments.local_mux.partition(":")
+        local_port = int(local_port_text)
         print()
-        print(f"local mux {arguments.local_mux}")
+        print(f"local mux {arguments.local_mux}"
+              + (" (PROXY protocol v2)" if arguments.proxy_protocol else ""))
+        if arguments.proxy_protocol:
+            # The mux refuses a headerless connection here, so the header has
+            # to carry a real source: what the Java backend prints back is the
+            # only place the value it read is visible. The destination is
+            # where the probe is actually going.
+            source = ("203.0.113.7", 40777)
+            destination = (local_host, local_port)
+            try:
+                header = proxy_v2_header(source, destination)
+            except OSError as error:
+                print(f"  ERROR: --proxy-protocol needs an IPv4 --local-mux: {error}")
+                return 2
+        else:
+            header = b""
         for name, payload, describe in [
             ("java", JAVA_PING, describe_java),
             ("http", HTTP_REQUEST.format(host=arguments.host).encode(), describe_http),
         ]:
             try:
-                response = exchange(local_host, int(local_port), payload, arguments.timeout)
+                response = exchange(local_host, local_port, header + payload, arguments.timeout)
             except OSError as error:
                 label, detail = "NO DATA", f"{type(error).__name__}: {error}"
             else:

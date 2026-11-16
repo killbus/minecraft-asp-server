@@ -802,8 +802,8 @@ sh scripts/scenes/frpc-shared-tcp.sh up --config ~/asp-frpcs --no-attach \
 Repeating `--tls-cert` is not a way to route by account: the mux sees only
 the bytes on its own loopback port, and nothing in them says which tunnel a
 connection arrived through. Two accounts that have to reach two servers
-need one mux per local port, or PROXY protocol, which this scene does not
-parse.
+need one mux per local port, or PROXY protocol pointed at one backend
+only (10.1.1).
 
 `fullchain.pem` / `privkey.pem` are the issuer's file names, not something
 the scene produces: the PEM has to come from a certificate authority for a
@@ -900,15 +900,69 @@ the player is valid for the name the player typed, whichever side
 terminates TLS - Geyser (`bedrock.signaling.builtin.https.*`) without
 `--tls-cert`, HAProxy with it.
 
-Two deliberate limits. HAProxy relays without speaking PROXY protocol, so
-leave frpc's `transport.proxyProtocolVersion` unset and do not configure
-the backends to expect it. And it shares TCP only; the WebRTC media plane
-is UDP and still needs its own frpc proxy.
+Two deliberate limits. By default HAProxy relays without speaking PROXY
+protocol, so with no `--proxy-protocol` leave frpc's
+`transport.proxyProtocolVersion` unset and do not configure the backends
+to expect it. And it shares TCP only; the WebRTC media plane is UDP and
+still needs its own frpc proxy.
+
+#### 10.1.1 Real client addresses (opt-in PROXY protocol v2)
+
+Java players reach Paper as `127.0.0.1`, so every offline account shares
+one IP: sessions, bans and LoginTo's recorded address cannot tell two
+players apart, and the login line prints the loopback address. That
+suits this deployment until something needs the real address, and then
+it is a four-part switch. `--proxy-protocol` makes the generated
+configuration accept a PROXY protocol v2 header on the shared port
+(`bind ... accept-proxy`) and give the Java backend one of its own
+(`server paper ... send-proxy-v2`, the IP frpc named). Every other
+generated line is untouched, so plain mode's output does not move.
+
+*Only the scene's own generated configuration carries the two
+directives: `--haproxy-config` takes over the whole file, so add them
+there by hand.*
+
+All four have to be set in one move, because the tunnel is unusable
+while they disagree - a plain service behind a mux that demands a
+header, or a service that demands one behind a mux that sends none, both
+refuse every connection:
+
+| Where | Setting |
+| --- | --- |
+| frpc, per tunnel | `transport.proxyProtocolVersion = "v2"` in that `[[proxies]]` block; the provider's launcher writes the same thing from its `proxy_protocol_version = v2` custom setting |
+| the scene | `sh scripts/scenes/frpc-shared-tcp.sh up ... --proxy-protocol` |
+| Paper | `config/paper-global.yml`: `proxies.proxy-protocol: true` |
+| Geyser | `plugins/Geyser-Spigot/config.yml`: `advanced.java.use-haproxy-protocol: true` |
+
+The port then only accepts a header, so anything that reaches it without
+one is refused - which is what makes frpc's half mandatory, and what
+breaks a local `curl` or a raw client aimed at the mux. The two local
+tools know it: `scripts/probe_public_entry.py --proxy-protocol` prefixes
+its `--local-mux` connections with a header (the public half is real
+traffic, where frpc adds it), and the smoke test runs its checks both
+plain and with headers, including that a headerless connection is
+refused.
+
+On the backend side, Paper's `proxies.proxy-protocol: true` applies to
+its whole Java listener, so Geyser's own connection to it has to carry a
+header too: that is `advanced.java.use-haproxy-protocol: true`.
+Bedrock's built-in signalling is not forced: the mux's `server geyser ...`
+line carries no `send-proxy-v2`, and Geyser's NetherNet listeners still
+take a connection without one. `server.properties` already has
+`prevent-proxy-connections=false` and `log-ips=true` on both hosts.
+
+Acceptance, on the host: a boot/login line `<name>[/<real-public-ip>:
+<port>] logged in with entity id ...` where the address is the player's,
+not `127.0.0.1`. Roll back by dropping `--proxy-protocol` from the scene
+and turning both `proxies.proxy-protocol` and
+`advanced.java.use-haproxy-protocol` back to `false`; the generated file
+then matches the plain output byte-for-byte.
 
 `--dry-run` prints the HAProxy configuration and the tmux commands
 without starting tmux, frpc or HAProxy. `--listen`, `--java` and
 `--bedrock` override the three local endpoints; `--tls-cert` and
-`--tls-listen` switch on the terminating variant described above.
+`--tls-listen` switch on the terminating variant described above, and
+`--proxy-protocol` the real-address variant of 10.1.1.
 `--haproxy-config FILE` substitutes a hand-written configuration, which is
 checked with `haproxy -c -f` before anything starts and is never
 rewritten. Without it the scene creates `.tmp/frpc-shared-tcp/` as needed

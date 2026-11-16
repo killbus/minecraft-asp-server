@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/11-16-frpc-proxy-protocol/research/natfrp-realip.md", "reason": "The four switches in code and SOP are only correct if they agree with this page."}
+{"file": "docs/ASP-SOP.md", "reason": "Acceptance criteria R5: the operator-facing description of the chain, its caveat and its rollback."}

@@ -17,7 +17,7 @@
 #        [--config <dir|file>]... [--listen HOST:PORT] \
 #        [--java HOST:PORT] [--bedrock HOST:PORT] \
 #        [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] \
-#        [--haproxy-config FILE] [--no-attach] [--dry-run]
+#        [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]
 #    scripts/scenes/frpc-shared-tcp.sh reload
 #    scripts/scenes/frpc-shared-tcp.sh down
 #    scripts/scenes/frpc-shared-tcp.sh status
@@ -35,9 +35,20 @@
 #  TCP proxy must point localPort at the mux listen port.
 #
 #  The demux sends a TLS ClientHello or an HTTP method prefix to
-#  Geyser built-in signalling and everything else to Java. It does
-#  not parse PROXY protocol: leave frpc's
+#  Geyser built-in signalling and everything else to Java. By default
+#  it does not parse PROXY protocol: leave frpc's
 #  transport.proxyProtocolVersion unset.
+#
+#  --proxy-protocol makes the demux speak PROXY protocol v2 instead:
+#  the shared port then only accepts a connection whose first bytes are
+#  a v2 header, and HAProxy hands the Java backend a header of its own,
+#  so Paper sees each player's real public address rather than
+#  127.0.0.1. Everything that reaches the port has to send the header,
+#  the frpc TCP proxy included (transport.proxyProtocolVersion = "v2"),
+#  and the backend has to be told to expect it
+#  (Paper proxies.proxy-protocol; Geyser advanced.java.use-haproxy-protocol).
+#  scripts/probe_public_entry.py --proxy-protocol speaks it for the
+#  local-mux checks. Nothing else about the configuration moves.
 #
 #  With --tls-cert the scene terminates TLS itself: the shared port
 #  keeps the ClientHello on a second loopback bind (--tls-listen)
@@ -171,7 +182,7 @@ esac
 usage() {
     printf '%s\n' \
         'Usage:' \
-        '  scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> [--config <dir|file>]... [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] [--haproxy-config FILE] [--no-attach] [--dry-run]' \
+        '  scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> [--config <dir|file>]... [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]' \
         '  scripts/scenes/frpc-shared-tcp.sh reload' \
         '  scripts/scenes/frpc-shared-tcp.sh down' \
         '  scripts/scenes/frpc-shared-tcp.sh status' \
@@ -268,7 +279,11 @@ is_endpoint() {
 # second loopback bind ($5) that HAProxy decrypts with the PEMs in $4 (one
 # per line, one `crt` each, so SNI chooses between several names), so Geyser
 # receives plain HTTP and needs no certificate of its own. $6 is 1 to add
-# `strict-sni`, which refuses a ClientHello no certificate covers.
+# `strict-sni`, which refuses a ClientHello no certificate covers. $7 is 1 to
+# speak PROXY protocol v2 on the shared port: `accept-proxy` on its bind and
+# `send-proxy-v2` to the Java backend, so Paper sees the real client address
+# instead of 127.0.0.1. Only those two lines move; the default config is
+# unchanged.
 print_haproxy_config() {
     _ph_listen=$1
     _ph_java=$2
@@ -276,6 +291,12 @@ print_haproxy_config() {
     _ph_tls_certs=$4
     _ph_tls_listen=$5
     _ph_strict_sni=$6
+    _ph_accept_proxy=
+    _ph_send_proxy=
+    if [ "${7:-0}" -eq 1 ]; then
+        _ph_accept_proxy=' accept-proxy'
+        _ph_send_proxy=' send-proxy-v2'
+    fi
     _ph_crt_args=
     _ph_cert_names=0
     if [ -n "$_ph_tls_certs" ]; then
@@ -308,7 +329,7 @@ defaults
     timeout server 1h
 
 frontend mc_shared
-    bind $_ph_listen
+    bind $_ph_listen$_ph_accept_proxy
     acl is_tls req.ssl_hello_type 1
     acl is_http payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "
     acl is_java payload(0,1) -m bin fe
@@ -333,7 +354,7 @@ backend geyser_signaling
     server geyser $_ph_bedrock
 
 backend java
-    server paper $_ph_java
+    server paper $_ph_java$_ph_send_proxy
 EOF
     if [ -n "$_ph_tls_certs" ]; then
         cat <<EOF
@@ -367,7 +388,7 @@ generate_haproxy_config() {
     esac
     mkdir -p "$_gh_dir" || return 1
     _gh_tmp=${_gh_cfg}.tmp.$$
-    if ! print_haproxy_config "$2" "$3" "$4" "$5" "$6" "$7" > "$_gh_tmp"; then
+    if ! print_haproxy_config "$2" "$3" "$4" "$5" "$6" "${7:-0}" "${8:-0}" > "$_gh_tmp"; then
         rm -f "$_gh_tmp"
         return 1
     fi
@@ -670,6 +691,7 @@ cmd_up() {
     _tls_listen_set=0
     TLS_CERTS=
     STRICT_SNI=0
+    PROXY_PROTOCOL=0
     TLS_LISTEN=$MUX_TLS_LISTEN
     LISTEN=$MUX_LISTEN
     JAVA=$MUX_JAVA
@@ -730,6 +752,13 @@ cmd_up() {
                 ;;
             --strict-sni)
                 STRICT_SNI=1
+                shift
+                ;;
+            --proxy-protocol)
+                # A boolean, like --strict-sni: it takes no value, so
+                # `--proxy-protocol=x` is not this option and falls through to
+                # the unknown-option branch below.
+                PROXY_PROTOCOL=1
                 shift
                 ;;
             --tls-listen)
@@ -888,7 +917,7 @@ cmd_up() {
         if [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
             printf '# frpc-shared: would generate HAProxy config %s\n' "$_haproxy_config"
             print_haproxy_config "$LISTEN" "$JAVA" "$BEDROCK" "$TLS_CERTS" "$TLS_LISTEN" \
-                "$STRICT_SNI"
+                "$STRICT_SNI" "$PROXY_PROTOCOL"
         else
             printf '# frpc-shared: would use HAProxy config %s\n' "$_haproxy_config"
         fi
@@ -960,7 +989,7 @@ cmd_up() {
 
     if [ -z "$_haproxy_config" ] || [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
         if ! generate_haproxy_config "$_haproxy_config" "$LISTEN" "$JAVA" "$BEDROCK" \
-            "$TLS_CERTS" "$TLS_LISTEN" "$STRICT_SNI"; then
+            "$TLS_CERTS" "$TLS_LISTEN" "$STRICT_SNI" "$PROXY_PROTOCOL"; then
             echo "[frpc-shared] ERROR: cannot write HAProxy config: $_haproxy_config" >&2
             exit 1
         fi

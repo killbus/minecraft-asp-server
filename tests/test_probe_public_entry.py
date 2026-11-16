@@ -34,12 +34,42 @@ EDGE_PAGE = (
 )
 JAVA_REPLY = b"\xff" + "1.20.4".encode("utf-16-be") + b"\x00\x00"
 PLAIN_HTTP = b"HTTP/1.1 200 OK\r\nServer: Geyser\r\nContent-Length: 2\r\n\r\nok"
+# What the header has to be for the family the probe sends, spelled out so
+# the test does not just echo the implementation's own constants.
+PROXY_SIGNATURE = b"\r\n\r\n\x00\r\nQUIT\n"
 
 
 class FakeJava(socketserver.BaseRequestHandler):
     def handle(self):
         # A Minecraft server answers a legacy ping with 0xFF plus a UTF-16
         # string. Anything else here is a client that is not asking.
+        self.request.recv(64)
+        self.request.sendall(JAVA_REPLY)
+
+
+def read_proxy_v2(connection):
+    """Read one PROXY v2 header and return the payload address block."""
+    header = b""
+    while len(header) < 16:
+        chunk = connection.recv(16 - len(header))
+        if not chunk:
+            raise ConnectionError("the connection closed inside the PROXY header")
+        header += chunk
+    length = int.from_bytes(header[14:16], "big")
+    addresses = b""
+    while len(addresses) < length:
+        chunk = connection.recv(length - len(addresses))
+        if not chunk:
+            raise ConnectionError("the connection closed inside the PROXY header")
+        addresses += chunk
+    return addresses
+
+
+class FakeProxiedJava(socketserver.BaseRequestHandler):
+    """A Java backend behind a mux that sends PROXY v2 (the real chain)."""
+
+    def handle(self):
+        read_proxy_v2(self.request)
         self.request.recv(64)
         self.request.sendall(JAVA_REPLY)
 
@@ -135,7 +165,35 @@ class ProbePublicEntryTests(unittest.TestCase):
         self.assertEqual(1, code, output)
         self.assertIn("local mux 127.0.0.1:", output)
         self.assertEqual(1, output.split("local mux")[1].count("JAVA"), output)
+        self.assertNotIn("PROXY", output)
         self.assertEqual("", errors)
+
+    def test_proxy_protocol_prefixes_the_local_mux_connections(self):
+        public = self.serve(FakeEdgePage)
+        mux = self.serve(FakeProxiedJava)
+
+        code, output, errors = self.run_probe(
+            "--port", str(public), "--local-mux", f"127.0.0.1:{mux}",
+            "--proxy-protocol",
+        )
+
+        self.assertEqual(1, code, output)
+        self.assertIn(f"local mux 127.0.0.1:{mux} (PROXY protocol v2)", output)
+        self.assertEqual(1, output.split("local mux")[1].count("JAVA"), output)
+        self.assertEqual("", errors)
+
+    def test_the_header_is_a_well_formed_proxy_v2_header(self):
+        self.assertEqual(
+            PROXY_SIGNATURE
+            + b"\x21"  # version 2, PROXY command
+            + b"\x11"  # AF_INET, STREAM
+            + b"\x00\x0c"  # 12 bytes of addresses
+            + b"\xcb\x00\x71\x07"  # 203.0.113.7 - the source the probe names
+            + b"\x7f\x00\x00\x01"  # 127.0.0.1 - the target it is going to
+            + b"\x9f\x49"  # 40777 - the source port
+            + b"\x63\xdd",  # 25565 - the destination port
+            probe.proxy_v2_header(("203.0.113.7", 40777), ("127.0.0.1", 25565)),
+        )
 
     def test_a_closed_port_reports_the_failure_without_a_traceback(self):
         code, output, errors = self.run_probe("--port", str(self.closed_port()))
