@@ -1,0 +1,4 @@
+{"file": "docs/ASP-SOP.md", "reason": "sections 10.1 and 10.1.1 set the voice, the switch table, the acceptance line and the rollback shape the new media subsection has to match"}
+{"file": ".trellis/tasks/11-16-bedrock-real-ip/prd.md", "reason": "the C1 decision, the entry-is-intent rationale, the four operator-side changes, the acceptance line and the rollback this subsection carries"}
+{"file": ".trellis/tasks/11-16-bedrock-real-ip/research/q2-switch-comparison.md", "reason": "verified semantics of webrtc-proxy-protocol-relays, and what relay mode closes (direct path, TURN, SDP answers)"}
+{"file": ".trellis/tasks/archive/2026-11/11-16-frpc-proxy-protocol/research/natfrp-realip.md", "reason": "the natfrp side of the relay: UDP tunnels need v2 and frpc >= 0.42.0-sakura-4"}

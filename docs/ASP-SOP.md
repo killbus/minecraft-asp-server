@@ -326,6 +326,10 @@ example `<frp-public-ip>:<udp-port>`), never a host name:
   resolves to <ips>` - the fastest way to see what was actually
   advertised.
 
+`advanced.bedrock.webrtc-proxy-protocol-relays`, with
+`advertise-addresses` naming the relays, is the media-plane real-address
+chain of 10.1.2.
+
 `plugins/Geyser-Spigot/nethernet/` is instance identity, not cache: the
 P-384 machine key, the saved registration/challenge and
 `operator-link.txt` live there (`provider-state/`, `identity.pem`).
@@ -879,7 +883,7 @@ localIP = "127.0.0.1"
 localPort = 25566
 remotePort = <tcp-port>
 
-# UDP: NetherNet media plane -> Geyser (unchanged, not behind HAProxy)
+# UDP: NetherNet media plane -> Geyser (not behind HAProxy; see 10.1.2)
 [[proxies]]
 name = "minecraft_bedrock_media"
 type = "udp"
@@ -909,58 +913,6 @@ protocol, so with no `--proxy-protocol` leave frpc's
 `transport.proxyProtocolVersion` unset and do not configure the backends
 to expect it. And it shares TCP only; the WebRTC media plane is UDP and
 still needs its own frpc proxy.
-
-#### 10.1.1 Real client addresses (opt-in PROXY protocol v2)
-
-Java players reach Paper as `127.0.0.1`, so every offline account shares
-one IP: sessions, bans and LoginTo's recorded address cannot tell two
-players apart, and the login line prints the loopback address. That
-suits this deployment until something needs the real address, and then
-it is a four-part switch. `--proxy-protocol` makes the generated
-configuration accept a PROXY protocol v2 header on the shared port
-(`bind ... accept-proxy`) and give the Java backend one of its own
-(`server paper ... send-proxy-v2`, the IP frpc named). Every other
-generated line is untouched, so plain mode's output does not move.
-
-*Only the scene's own generated configuration carries the two
-directives: `--haproxy-config` takes over the whole file, so add them
-there by hand.*
-
-All four have to be set in one move, because the tunnel is unusable
-while they disagree - a plain service behind a mux that demands a
-header, or a service that demands one behind a mux that sends none, both
-refuse every connection:
-
-| Where | Setting |
-| --- | --- |
-| frpc, per tunnel | `transport.proxyProtocolVersion = "v2"` in that `[[proxies]]` block; the provider's launcher writes the same thing from its `proxy_protocol_version = v2` custom setting |
-| the scene | `sh scripts/scenes/frpc-shared-tcp.sh up ... --proxy-protocol` |
-| Paper | `config/paper-global.yml`: `proxies.proxy-protocol: true` |
-| Geyser | `plugins/Geyser-Spigot/config.yml`: `advanced.java.use-haproxy-protocol: true` |
-
-The port then only accepts a header, so anything that reaches it without
-one is refused - which is what makes frpc's half mandatory, and what
-breaks a local `curl` or a raw client aimed at the mux. The two local
-tools know it: `scripts/probe_public_entry.py --proxy-protocol` prefixes
-its `--local-mux` connections with a header (the public half is real
-traffic, where frpc adds it), and the smoke test runs its checks both
-plain and with headers, including that a headerless connection is
-refused.
-
-On the backend side, Paper's `proxies.proxy-protocol: true` applies to
-its whole Java listener, so Geyser's own connection to it has to carry a
-header too: that is `advanced.java.use-haproxy-protocol: true`.
-Bedrock's built-in signalling is not forced: the mux's `server geyser ...`
-line carries no `send-proxy-v2`, and Geyser's NetherNet listeners still
-take a connection without one. `server.properties` already has
-`prevent-proxy-connections=false` and `log-ips=true` on both hosts.
-
-Acceptance, on the host: a boot/login line `<name>[/<real-public-ip>:
-<port>] logged in with entity id ...` where the address is the player's,
-not `127.0.0.1`. Roll back by dropping `--proxy-protocol` from the scene
-and turning both `proxies.proxy-protocol` and
-`advanced.java.use-haproxy-protocol` back to `false`; the generated file
-then matches the plain output byte-for-byte.
 
 `--dry-run` prints the HAProxy configuration and the tmux commands
 without starting tmux, frpc or HAProxy. `--listen`, `--java` and
@@ -1099,6 +1051,109 @@ arrives means the server was never in question. It refuses to start while
 the scene holds the listen port, and its judgement is covered by
 `tests/test_plain_website_check.py`, which runs the whole check against a
 stand-in proxy and a stand-in tunnel instead of haproxy and frpc.
+
+#### 10.1.1 Real client addresses (opt-in PROXY protocol v2)
+
+Java players reach Paper as `127.0.0.1`, so every offline account shares
+one IP: sessions, bans and LoginTo's recorded address cannot tell two
+players apart, and the login line prints the loopback address. That
+suits this deployment until something needs the real address, and then
+it is a four-part switch. `--proxy-protocol` makes the generated
+configuration accept a PROXY protocol v2 header on the shared port
+(`bind ... accept-proxy`) and give the Java backend one of its own
+(`server paper ... send-proxy-v2`, the IP frpc named). Every other
+generated line is untouched, so plain mode's output does not move.
+
+*Only the scene's own generated configuration carries the two
+directives: `--haproxy-config` takes over the whole file, so add them
+there by hand.*
+
+All four have to be set in one move, because the tunnel is unusable
+while they disagree - a plain service behind a mux that demands a
+header, or a service that demands one behind a mux that sends none, both
+refuse every connection:
+
+| Where | Setting |
+| --- | --- |
+| frpc, per tunnel | `transport.proxyProtocolVersion = "v2"` in that `[[proxies]]` block; the provider's launcher writes the same thing from its `proxy_protocol_version = v2` custom setting |
+| the scene | `sh scripts/scenes/frpc-shared-tcp.sh up ... --proxy-protocol` |
+| Paper | `config/paper-global.yml`: `proxies.proxy-protocol: true` |
+| Geyser | `plugins/Geyser-Spigot/config.yml`: `advanced.java.use-haproxy-protocol: true` |
+
+The port then only accepts a header, so anything that reaches it without
+one is refused - which is what makes frpc's half mandatory, and what
+breaks a local `curl` or a raw client aimed at the mux. The two local
+tools know it: `scripts/probe_public_entry.py --proxy-protocol` prefixes
+its `--local-mux` connections with a header (the public half is real
+traffic, where frpc adds it), and the smoke test runs its checks both
+plain and with headers, including that a headerless connection is
+refused.
+
+On the backend side, Paper's `proxies.proxy-protocol: true` applies to
+its whole Java listener, so Geyser's own connection to it has to carry a
+header too: that is `advanced.java.use-haproxy-protocol: true`.
+Bedrock's built-in signalling is not forced: the mux's `server geyser ...`
+line carries no `send-proxy-v2`, and Geyser's NetherNet listeners still
+take a connection without one. `server.properties` already has
+`prevent-proxy-connections=false` and `log-ips=true` on both hosts.
+
+Acceptance, on the host: a boot/login line `<name>[/<real-public-ip>:
+<port>] logged in with entity id ...` where the address is the player's,
+not `127.0.0.1`. Roll back by dropping `--proxy-protocol` from the scene
+and turning both `proxies.proxy-protocol` and
+`advanced.java.use-haproxy-protocol` back to `false`; the generated file
+then matches the plain output byte-for-byte.
+
+#### 10.1.2 Bedrock media: forcing the relay (real client addresses)
+
+The address a player types is their choice: this deployment hands out the
+frp entry and nothing else, so a Bedrock client's media belongs on the
+relay too. The WebRTC path, though, is picked by ICE, and a client on the
+server's own LAN finds a direct candidate and takes it - a path nobody
+asked for. `advanced.bedrock.webrtc-proxy-protocol-relays` is what closes
+it. It is the media-plane counterpart of 10.1.1: that chain carries a Java
+player's address through the shared TCP port, this one carries a Bedrock
+player's address through the UDP tunnel, and neither needs the other.
+
+Three settings, in one move, because the media port is unusable while they
+disagree:
+
+| Where | Setting |
+| --- | --- |
+| frpc, the UDP tunnel in front of the media port | `proxy_protocol_version = v2` in that tunnel block (the INI form; a TOML config spells it `transport.proxyProtocolVersion = "v2"`) |
+| Geyser | `bedrock.signaling.advertise-addresses` names the relay: the frp node's numeric public address together with the media port, replacing the host name that field holds here |
+| Geyser | `advanced.bedrock.webrtc-proxy-protocol-relays: [<that address>]` |
+| Geyser (already so) | `bedrock.webrtc-port: 0` puts the media port on `bedrock.port` (19132), which is the fixed ICE port the relay code requires |
+
+Once the relay is listed the SDP answer names only the relays, so every
+Bedrock client is steered through them - including one on the server's own
+LAN, which is the point and also the cost. The media port then stops
+accepting a headerless connection, and TURN servers cannot work behind
+these relays, so nothing but the relay reaches the media plane. NATFRP's
+UDP tunnels need v2 (v1 is not an option) and frpc >= `0.42.0-sakura-4`.
+
+What the operator then sees: the address Paper logs for a Bedrock player
+becomes the address the relay saw. For a client on the server's own LAN
+that is the household's public address, because its traffic leaves through
+the same router. The port stays `0` - Geyser itself builds the Java-side
+address as `<host>:0` (`LocalSession`) - so `[/<public-address>:0]` is the
+expected shape and not a fault.
+
+Acceptance, on the host: the same Bedrock client that logs
+`<name>[/<its-own-LAN-address>:0]` today (the observed case) now logs the
+household's public address in that field and still reaches the world.
+Roll back by removing the relay from `webrtc-proxy-protocol-relays` and
+clearing `proxy_protocol_version` on the UDP tunnel; the direct path
+returns for everyone.
+
+Recorded, not a gate: the relay address should be numeric rather than a
+host name, because it has to be the node that actually forwards to this
+tunnel; the fake-IP history and the absence of multi-node today are already
+settled, so this stays a note. For the entry-point settings themselves,
+including `advertise-addresses` and the signalling modes, see 4.2.
+
+`advanced.bedrock.prefer-signaling-proxy-address` is a different lever: it
+moves the signalling-side address only, and is not part of this chain.
 
 ### 10.2 Keeping the certificate for the shared port current (Linux only)
 
