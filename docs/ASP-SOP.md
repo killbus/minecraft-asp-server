@@ -396,8 +396,12 @@ Baseline `plugins/LoginTo/config.yml` on this server:
 - `settings.premium.enabled: false`, `settings.premium.auto-register: true`
   (Bedrock players only - see the fork notes above).
 - `settings.sessions.enabled: false`. Session reuse is keyed on the
-  recorded IP, and both frpc entries in section 10 arrive as `127.0.0.1`,
-  so sessions would log in every player after the first one.
+  recorded IP, and both frpc entries in section 10 arrive as `127.0.0.1`
+  while the mux relays without PROXY protocol (10.1, the default), so
+  sessions would log in every player after the first one. The opt-in
+  chain of 10.1.1 gives the backend the player's own address again, so
+  with it on that blocker is gone and turning sessions back on is a
+  separate decision rather than something this list rules out.
 - `settings.password.authentication-timeout: 0`, so a slow typist is not
   kicked while registering. `max-login-attempts` still applies.
 
