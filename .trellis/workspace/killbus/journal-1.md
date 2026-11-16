@@ -171,3 +171,39 @@ Recorded the operator decision to write bedrock.signaling.advertise-addresses as
 
 - server/plugins/Geyser-Spigot/config.yml:54-56 still carries the local never-a-host-name NOTE and is not in the repo; decide whether to rewrite it here or on the host.
 - Host acceptance of the relay chain is still outstanding (UDP tunnel proxy_protocol_version = v2, webrtc-proxy-protocol-relays, then check the Bedrock login line).
+
+
+## Session 6: Declarative mixed frpc scenes
+<!-- trellis-session: v=2 fp=89da2236fc90968a -->
+
+**Date**: 2026-11-17
+**Task**: Declarative mixed frpc scenes
+**Branch**: `rewrite/main-20261115`
+
+### Summary
+
+Added per-process frpc scene manifests, official-frpc UDP PROXY v2 support, shared-TCP composition, examples, diagnostics, and SOP contracts.
+
+### Main Changes
+
+- frpc.sh --scene: one binary/config per section and a server-less lifecycle
+- frpc-shared-tcp.sh --scene: sidecars, then HAProxy, then the server
+- Documented the real-address chain and the LAN 25565 implication
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `757c451` | feat(scenes): add declarative mixed frpc manifests |
+
+### Testing
+
+- [OK] python -B -m unittest tests.test_frpc_scene_manifest tests.test_frpc_shared_tcp_scene tests.test_probe_public_udp -v (73 passed)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Use the operator-owned scene for two TCP entries plus the official frpc UDP tunnel
