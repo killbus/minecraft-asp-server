@@ -229,3 +229,25 @@ Added an automatic plain Java frontend on 0.0.0.0:25564 when frpc-shared-tcp run
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: Certificate expiry observability for shared TCP
+<!-- trellis-session: v=2 fp=354ce9b115240914 -->
+
+**Date**: 2026-11-17
+**Task**: Certificate expiry observability for shared TCP
+**Branch**: `rewrite/main-20261115`
+
+### Summary
+
+frpc-shared-tcp now reports each --tls-cert subject, SANs, notAfter, remaining days, and warnings for expired/not-yet-valid or expiring certificates; MUX_CERT_WARN_DAYS defaults to 7 to match the natfrp renewal window. up writes a MUX_CERT_STATE inventory after the mux is listening, status reports it, and down removes it. Renewal/download remain outside the scene. Added tests for warning/non-blocking behavior, status inventory, up/down lifecycle, and invalid threshold input; 79 tests passed with 10 platform skips.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7512374` | feat(scenes): report certificate expiry from shared TCP |
+
+### Status
+
+[OK] **Completed**
