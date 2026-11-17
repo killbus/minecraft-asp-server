@@ -809,6 +809,25 @@ renewal that worked. `MUX_HAPROXY_CONFIG` says which file to read, so a
 status call can follow an `up --haproxy-config`; without it, the scene's own
 generated configuration is the one reported.
 
+Certificate expiry is observed, not managed, by this scene. `up` prints
+each `--tls-cert` file's subject, SANs, `notAfter`, and remaining days when
+`openssl` can parse it. It warns when expiry is inside
+`MUX_CERT_WARN_DAYS` (default 7, the same window in which the provider
+accepts renewal), but an expired or nearly expired PEM
+does not stop HAProxy by default: validation still fails only for a missing
+file, missing key, or unusable configuration. `up` records the resolved
+paths in `MUX_CERT_STATE` (default `.tmp/frpc-shared-tcp/certs`) after the
+mux is confirmed listening; `status` reports that inventory, and `down`
+removes it. Failing to write the inventory is a warning, not a reason to
+stop a working mux. A hand-written
+`--haproxy-config` remains untracked because the scene does not parse its
+quoting; `status` says so instead of guessing.
+
+Downloading, renewing, and scheduling the certificate stay outside this
+scene (10.2). After a PEM is replaced, `reload` is still the explicit step
+that makes HAProxy read it; the scene neither watches files nor reloads on
+its own.
+
 | Local endpoint | Role |
 | --- | --- |
 | `127.0.0.1:25566` (mux, default) | public TCP entry, demultiplexed |
@@ -1360,6 +1379,12 @@ One run does this, in order:
    a reader never sees half a file, and with no group or other access,
    because the file holds a private key and the umask must not decide that.
 6. Run `--reload-command`, and only when the file changed.
+
+The sync script owns renewal; the shared scene owns the read-only check.
+After a run, `frpc-shared-tcp.sh status` shows the loaded certificate's
+subject, SANs, and expiry from its `MUX_CERT_STATE` inventory, so a file
+that was written but not reloaded, or one that is still near expiry, is
+visible without opening the provider API.
 
 The reload command is the one in the example, because the scene already owns
 the arrangement it needs: the mux runs in master-worker mode with a pidfile,

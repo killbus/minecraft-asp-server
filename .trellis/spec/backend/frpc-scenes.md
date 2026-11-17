@@ -77,6 +77,30 @@ backend carries `send-proxy-v2`, so Paper still sees a PROXY v2 header. The
 frontend is emitted only for the generated configuration. A hand-written
 `--haproxy-config` owns the whole file and must add the frontend itself.
 
+#### Certificate expiry observation
+
+`--tls-cert` is a consumed input, not something this scene provisions.
+Renewal, download, token handling, and post-renew actions remain outside it.
+The scene must still make the input's validity observable:
+
+- `up` prints each certificate's subject, SANs, `notAfter`, and remaining
+  days when `openssl` can parse it;
+- `MUX_CERT_WARN_DAYS` (default 7) turns expiry inside that window into a
+  warning;
+- an expired, not-yet-valid, or near-expiry certificate does not block
+  startup by default; only a missing PEM/key or an unusable configuration
+  fails closed;
+- `up` writes the resolved certificate paths to `MUX_CERT_STATE`
+  (`.tmp/frpc-shared-tcp/certs`) after the mux is confirmed listening;
+  `status` reads that inventory, and `down` removes it. A failed inventory
+  write is a warning, not a reason to tear down a working mux;
+- a hand-written `--haproxy-config` has no inventory; `status` prints the
+  actual TLS bind but says expiry is untracked rather than re-parsing
+  HAProxy quoting.
+
+Replacing a PEM requires the existing `reload` verb to make HAProxy read it.
+The scene does not watch files or reload on its own.
+
 ### 3. Contracts
 
 #### Manifest grammar
@@ -199,6 +223,7 @@ all frpc sidecars -> HAProxy binds -> server starts
 | duplicate scene path option | exit 2 |
 | invalid `MUX_LAN_JAVA` in generated PROXY mode | exit 2 |
 | `MUX_LAN_JAVA` collides with another bind | exit 2 |
+| non-numeric `MUX_CERT_WARN_DAYS` | exit 2 |
 | missing/unreadable scene file | exit 2 |
 | missing `session` or `server` | exit 2 |
 | invalid `server` value | exit 2 |
@@ -285,6 +310,10 @@ config = udp.toml
 - `MUX_LAN_JAVA` can override the bind and is rejected when malformed or
   when it collides with another endpoint;
 - a hand-written config keeps ownership of its whole file.
+- a parseable certificate reports subject and expiry; one inside
+  `MUX_CERT_WARN_DAYS` warns without preventing `--dry-run` or startup;
+- `status` reads `MUX_CERT_STATE` and reports the inventory written by
+  `up`; malformed `MUX_CERT_WARN_DAYS` is rejected.
 
 `tests/test_probe_public_udp.py` must assert PROXY v2 parsing, including that
 `LOCAL` ignores populated address fields. The probe is diagnostic only and

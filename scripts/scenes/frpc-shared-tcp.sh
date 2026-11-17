@@ -85,6 +85,12 @@
 #  --strict-sni makes such a handshake fail. Java carries no SNI, so
 #  none of this changes how Java traffic is routed.
 #
+#  Every certificate is also inspected at 'up' and through 'status':
+#  subject, SANs and notAfter. One that expires inside
+#  MUX_CERT_WARN_DAYS (default 7) is reported as a warning, not a
+#  refusal to start. Downloading or renewing it is outside this scene;
+#  that belongs to the provider/token pipeline and its schedule.
+#
 #  The mux runs in HAProxy master-worker mode with a pidfile
 #  (.tmp/frpc-shared-tcp/haproxy.pid, MUX_PIDFILE overrides it), so
 #  'reload' can swap that certificate under a running server: it sends
@@ -102,7 +108,9 @@
 #  (MUX_HAPROXY_CONFIG, default the generated config), because that line
 #  is where "which certificate is being served" is actually answered: a
 #  reload aimed at a file the configuration does not mention changes
-#  nothing, and says nothing.
+#  nothing, and says nothing. It then reports the certificate inventory
+#  'up' wrote, so a stale or nearly expired PEM is visible without
+#  re-parsing HAProxy's quoting.
 #
 #  The session, and the UTF-8 locale its panes get, belong to frpc.sh:
 #  this script creates no session of its own - it adds a mux window to
@@ -178,11 +186,16 @@ fi
 FRPC_SH=$SCRIPT_DIR/frpc.sh
 DEFAULT_HAPROXY_CONFIG=$ROOT/.tmp/frpc-shared-tcp/haproxy.cfg
 DEFAULT_HAPROXY_PID=$ROOT/.tmp/frpc-shared-tcp/haproxy.pid
+DEFAULT_CERT_STATE=$ROOT/.tmp/frpc-shared-tcp/certs
 # What 'status' reads. 'up --haproxy-config' says it for one run, so the
 # variable is how a status call sees the same file.
 MUX_HAPROXY_CONFIG=${MUX_HAPROXY_CONFIG:-$DEFAULT_HAPROXY_CONFIG}
 # The master holds the port, so its pidfile is what 'reload' signals.
 MUX_PIDFILE=${MUX_PIDFILE:-$DEFAULT_HAPROXY_PID}
+# The certificate inventory 'up' writes and 'status' reads. It is evidence
+# of what this scene validated, not another source of HAProxy configuration.
+MUX_CERT_STATE=${MUX_CERT_STATE:-$DEFAULT_CERT_STATE}
+MUX_CERT_WARN_DAYS=${MUX_CERT_WARN_DAYS:-7}
 # The command that sends the reload signal; a variable so a test can stand in
 # for it, the same way HAPROXY can point at another binary.
 MUX_SIGNAL=${MUX_SIGNAL:-kill}
@@ -198,6 +211,17 @@ case "$MUX_PIDFILE" in
             exit 1
         fi
         MUX_PIDFILE=$_scene_cwd/$MUX_PIDFILE
+        ;;
+esac
+case "$MUX_CERT_STATE" in
+    /*)
+        ;;
+    *)
+        if ! _cert_cwd=$(CDPATH= cd -- . 2>/dev/null && pwd -P); then
+            echo "[frpc-shared] ERROR: cannot resolve the current directory" >&2
+            exit 1
+        fi
+        MUX_CERT_STATE=$_cert_cwd/$MUX_CERT_STATE
         ;;
 esac
 
@@ -620,6 +644,120 @@ report_mux_status() {
     esac
 }
 
+# Print one certificate's identity and validity. This is observation, not
+# lifecycle management: renewal and download stay outside this scene, and a
+# certificate openssl cannot parse is reported rather than rejected because
+# HAProxy is the component that decides whether it can load the file.
+report_certificate() {
+    _rc_cert=$1
+    _rc_line="[frpc-shared] tls: $_rc_cert"
+    _rc_warn=
+
+    if ! command -v openssl >/dev/null 2>&1; then
+        printf '%s: expiry unknown (openssl not found)\n' "$_rc_line"
+        return 0
+    fi
+
+    _rc_subject=$(openssl x509 -in "$_rc_cert" -noout -subject -nameopt RFC2253 2>/dev/null || true)
+    _rc_subject=${_rc_subject#subject=}
+    if [ -n "$_rc_subject" ]; then
+        _rc_line="$_rc_line: $_rc_subject"
+    fi
+    _rc_san=$(openssl x509 -in "$_rc_cert" -noout -ext subjectAltName 2>/dev/null || true)
+    if [ -n "$_rc_san" ]; then
+        _rc_san=$(printf '%s\n' "$_rc_san" | sed -n '2,$p' | tr -d '[:space:]')
+        if [ -n "$_rc_san" ]; then
+            _rc_line="$_rc_line; $_rc_san"
+        fi
+    fi
+
+    if ! _rc_end=$(openssl x509 -in "$_rc_cert" -noout -enddate 2>/dev/null); then
+        printf '%s: validity unknown (openssl cannot parse it)\n' "$_rc_line"
+        return 0
+    fi
+    _rc_end=${_rc_end#notAfter=}
+    _rc_now=$(date +%s 2>/dev/null || true)
+    _rc_end_epoch=$(date -d "$_rc_end" +%s 2>/dev/null || true)
+    _rc_line="$_rc_line; expires $_rc_end"
+    if [ -n "$_rc_now" ] && [ -n "$_rc_end_epoch" ] && [ "$_rc_end_epoch" -ge "$_rc_now" ]; then
+        _rc_days=$(((_rc_end_epoch - _rc_now) / 86400))
+        _rc_line="$_rc_line ($_rc_days days left)"
+    fi
+
+    if ! openssl x509 -in "$_rc_cert" -noout -checkend 0 >/dev/null 2>&1; then
+        _rc_warn="WARNING certificate has expired"
+    else
+        _rc_warn_seconds=$((MUX_CERT_WARN_DAYS * 86400))
+        if ! openssl x509 -in "$_rc_cert" -noout -checkend "$_rc_warn_seconds" >/dev/null 2>&1; then
+            _rc_warn="WARNING certificate expires within $MUX_CERT_WARN_DAYS days"
+        fi
+    fi
+
+    _rc_start=$(openssl x509 -in "$_rc_cert" -noout -startdate 2>/dev/null || true)
+    _rc_start=${_rc_start#notBefore=}
+    if [ -n "$_rc_now" ] && [ -n "$_rc_start" ]; then
+        _rc_start_epoch=$(date -d "$_rc_start" +%s 2>/dev/null || true)
+        if [ -n "$_rc_start_epoch" ] && [ "$_rc_start_epoch" -gt "$_rc_now" ]; then
+            _rc_warn="${_rc_warn:+$_rc_warn; }WARNING certificate is not valid until $_rc_start"
+        fi
+    fi
+
+    if [ -n "$_rc_warn" ]; then
+        printf '%s; %s\n' "$_rc_line" "$_rc_warn"
+    else
+        printf '%s\n' "$_rc_line"
+    fi
+}
+
+# Record the exact certificate files this invocation validated. 'status'
+# reads it to keep expiry visible without re-parsing HAProxy configuration.
+write_cert_inventory() {
+    if [ -z "$TLS_CERTS" ]; then
+        rm -f "$MUX_CERT_STATE"
+        return 0
+    fi
+    case "$MUX_CERT_STATE" in
+        */*)
+            _wci_dir=${MUX_CERT_STATE%/*}
+            if [ -z "$_wci_dir" ]; then
+                _wci_dir=/
+            fi
+            ;;
+        *)
+            _wci_dir=.
+            ;;
+    esac
+    if ! mkdir -p "$_wci_dir"; then
+        return 1
+    fi
+    _wci_tmp=${MUX_CERT_STATE}.tmp.$$
+    if ! printf '%s' "$TLS_CERTS" > "$_wci_tmp"; then
+        rm -f "$_wci_tmp"
+        return 1
+    fi
+    if ! mv -f "$_wci_tmp" "$MUX_CERT_STATE"; then
+        rm -f "$_wci_tmp"
+        return 1
+    fi
+}
+
+report_cert_inventory() {
+    if [ ! -f "$MUX_CERT_STATE" ]; then
+        return 0
+    fi
+    if [ ! -r "$MUX_CERT_STATE" ]; then
+        printf '[frpc-shared] tls: WARNING cannot read certificate inventory %s\n' \
+            "$MUX_CERT_STATE"
+        return 0
+    fi
+    while IFS= read -r _rci_cert; do
+        _rci_cert=$(printf '%s' "$_rci_cert" | tr -d '\r')
+        if [ -n "$_rci_cert" ]; then
+            report_certificate "$_rci_cert"
+        fi
+    done < "$MUX_CERT_STATE"
+}
+
 # Print the TLS binds of the configuration the mux reads. That line is where
 # "which certificate is being served" is actually answered, and its silence
 # is the failure mode worth breaking: reloading after writing a PEM the
@@ -649,6 +787,9 @@ EOF
     if [ "$_rt_found" -eq 0 ]; then
         printf '[frpc-shared] tls: %s binds no certificate; Geyser terminates TLS itself\n' \
             "$MUX_HAPROXY_CONFIG"
+    elif [ ! -f "$MUX_CERT_STATE" ]; then
+        printf '[frpc-shared] tls: certificate expiry is not tracked (no --tls-cert inventory at %s)\n' \
+            "$MUX_CERT_STATE"
     fi
 }
 
@@ -737,6 +878,12 @@ cmd_up() {
     JAVA=$MUX_JAVA
     BEDROCK=$MUX_BEDROCK
     LAN_JAVA=$MUX_LAN_JAVA
+    case "$MUX_CERT_WARN_DAYS" in
+        ''|*[!0-9]*)
+            echo "[frpc-shared] ERROR: MUX_CERT_WARN_DAYS must be a whole number of days" >&2
+            exit 2
+            ;;
+    esac
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -932,6 +1079,7 @@ cmd_up() {
                 echo "[frpc-shared]        cat fullchain.pem privkey.pem > <name>.pem" >&2
                 exit 2
             fi
+            report_certificate "$_cert_resolved"
             _tls_certs_resolved=$_tls_certs_resolved$_cert_resolved'
 '
         done
@@ -1111,6 +1259,10 @@ cmd_up() {
         FRPC_SESSION=$SESSION "$FRPC_SH" down >/dev/null 2>&1 || true
         exit 1
     fi
+    if ! write_cert_inventory; then
+        printf '[frpc-shared] WARNING: cannot write certificate inventory: %s\n' \
+            "$MUX_CERT_STATE" >&2
+    fi
 
     # 3. Only now start the server, the last prerequisite.
     if ! tmux set-window-option -t "=$SESSION:$SERVER_WINDOW" @asp-server-deferred 0; then
@@ -1153,6 +1305,7 @@ cmd_down() {
     # belong to something else by then.
     stop_mux || _down_status=1
     rm -f "$MUX_PIDFILE"
+    rm -f "$MUX_CERT_STATE"
     return "$_down_status"
 }
 
@@ -1203,8 +1356,15 @@ cmd_status() {
         usage >&2
         exit 2
     fi
+    case "$MUX_CERT_WARN_DAYS" in
+        ''|*[!0-9]*)
+            echo "[frpc-shared] ERROR: MUX_CERT_WARN_DAYS must be a whole number of days" >&2
+            exit 2
+            ;;
+    esac
     report_mux_status
     report_mux_tls
+    report_cert_inventory
     require_frpc || exit 1
     FRPC_SESSION=$SESSION "$FRPC_SH" status
 }

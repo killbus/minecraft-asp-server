@@ -8,6 +8,7 @@ decision testable on a development machine.
 from pathlib import Path
 import os
 import shutil
+import shlex
 import socket
 import subprocess
 import tempfile
@@ -43,6 +44,40 @@ class SharedTcpSceneTests(unittest.TestCase):
         path = self.directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+        return path
+
+    def real_pem(self, name, days, common_name="test.example"):
+        """A parseable combined PEM, so expiry observation can be tested."""
+        check = subprocess.run(
+            [SH, "-c", "command -v openssl >/dev/null 2>&1"],
+            cwd=self.directory, capture_output=True, text=True,
+        )
+        if check.returncode != 0:
+            self.skipTest("openssl is not available")
+        stem = Path(name).stem
+        certificate = self.directory / (stem + ".crt")
+        key = self.directory / (stem + ".key")
+        command = (
+            "openssl req -x509 -newkey rsa:2048 -nodes "
+            f"-keyout {shlex.quote(key.as_posix())} "
+            f"-out {shlex.quote(certificate.as_posix())} "
+            f"-days {days} -subj {shlex.quote('/CN=' + common_name)}"
+        )
+        environment = dict(os.environ)
+        # MSYS rewrites the /CN= argument into a Windows path otherwise.
+        environment["MSYS2_ARG_CONV_EXCL"] = "*"
+        result = subprocess.run(
+            [SH, "-c", command], cwd=self.directory,
+            capture_output=True, text=True, env=environment,
+        )
+        if result.returncode != 0:
+            self.skipTest("openssl could not create a test certificate")
+        path = self.directory / (stem + ".pem")
+        path.write_text(
+            certificate.read_text(encoding="ascii")
+            + key.read_text(encoding="ascii"),
+            encoding="ascii",
+        )
         return path
 
     def run_scene(self, *arguments, env=None):
@@ -303,6 +338,130 @@ class SharedTcpSceneTests(unittest.TestCase):
         )
 
         self.assertIn("--tls-listen must differ from MUX_LAN_JAVA", errors)
+
+    def test_expiring_certificate_is_reported_but_does_not_block(self):
+        certificate = self.real_pem("soon.pem", days=7, common_name="soon.example")
+
+        result = self.run_scene(
+            "--dry-run", "--tls-cert", certificate.as_posix(),
+            env={"MUX_CERT_WARN_DAYS": "14"},
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("CN=soon.example", result.stdout)
+        self.assertIn("WARNING certificate expires within 14 days", result.stdout)
+        self.assertIn("frontend geyser_tls_termination", result.stdout)
+
+    def test_healthy_certificate_has_no_expiry_warning(self):
+        certificate = self.real_pem("healthy.pem", days=30, common_name="healthy.example")
+
+        result = self.run_scene(
+            "--dry-run", "--tls-cert", certificate.as_posix(),
+            env={"MUX_CERT_WARN_DAYS": "14"},
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("CN=healthy.example", result.stdout)
+        self.assertIn("expires", result.stdout)
+        self.assertNotIn("WARNING certificate expires within", result.stdout)
+
+    def test_cert_warn_days_must_be_whole(self):
+        errors = self.assert_rejected(env={"MUX_CERT_WARN_DAYS": "two-weeks"})
+
+        self.assertIn("MUX_CERT_WARN_DAYS must be a whole number of days", errors)
+
+    def test_status_reports_the_certificate_inventory(self):
+        certificate = self.real_pem("status.pem", days=30, common_name="status.example")
+        inventory = Path("certs")
+        (self.directory / inventory).write_text(
+            certificate.as_posix() + "\n", encoding="utf-8"
+        )
+        scenes = self.directory / "scenes"
+        scenes.mkdir()
+        script = scenes / "frpc-shared-tcp.sh"
+        shutil.copy2(SCENE, script)
+        frpc = scenes / "frpc.sh"
+        frpc.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        frpc.chmod(0o755)
+        environment = dict(os.environ)
+        environment.update({
+            "MUX_CERT_STATE": inventory.as_posix(),
+            "MUX_HAPROXY_CONFIG": "absent.cfg",
+            "MUX_PIDFILE": "absent.pid",
+            "MUX_CERT_WARN_DAYS": "14",
+        })
+
+        result = subprocess.run(
+            [SH, script.as_posix(), "status"], cwd=self.directory,
+            capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn(certificate.as_posix(), result.stdout)
+        self.assertIn("CN=status.example", result.stdout)
+        self.assertIn("days left", result.stdout)
+
+    def test_up_writes_and_down_removes_the_certificate_inventory(self):
+        certificate = self.real_pem("inventory.pem", days=30, common_name="inventory.example")
+        stubs = self.directory / "stubs"
+        stubs.mkdir()
+        self.executable(
+            stubs, "tmux",
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "  has-session) exit 1 ;;\n"
+            "  new-window) printf '%s\\n' '@1' ;;\n"
+            "  list-panes) printf '0\\n' ;;\n"
+            "  respawn-window) : > mux-up ;;\n"
+            "  *) exit 0 ;;\n"
+            "esac\n",
+        )
+        self.executable(stubs, "haproxy", "#!/bin/sh\nexit 0\n")
+        self.executable(
+            stubs, "ss",
+            "#!/bin/sh\n"
+            "[ -f mux-up ] || exit 0\n"
+            "printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:25566 0.0.0.0:*'\n",
+        )
+        self.executable(stubs, "sleep", "#!/bin/sh\nexit 0\n")
+        scenes = self.directory / "a" / "b" / "scenes"
+        scenes.mkdir(parents=True)
+        script = scenes / "frpc-shared-tcp.sh"
+        shutil.copy2(SCENE, script)
+        frpc = scenes / "frpc.sh"
+        frpc.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        frpc.chmod(0o755)
+        environment = dict(os.environ)
+        environment.update({
+            "PATH": os.pathsep.join([stubs.as_posix(), environment["PATH"]]),
+            "HAPROXY": (stubs / "haproxy").as_posix(),
+            "MUX_CERT_STATE": "certs",
+            "MUX_READY_TIMEOUT": "3",
+        })
+
+        up = subprocess.run(
+            [
+                SH, script.as_posix(), "up", "--config", self.configs.as_posix(),
+                "--tls-cert", certificate.as_posix(), "--no-attach",
+            ],
+            cwd=self.directory, capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, up.returncode, up.stdout + up.stderr)
+        inventory = self.directory / "certs"
+        self.assertTrue(inventory.is_file(), up.stdout + up.stderr)
+        self.assertEqual(
+            "inventory.pem",
+            Path(inventory.read_text(encoding="utf-8").strip()).name,
+        )
+
+        down = subprocess.run(
+            [SH, script.as_posix(), "down"], cwd=self.directory,
+            capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, down.returncode, down.stdout + down.stderr)
+        self.assertFalse(inventory.exists())
 
     def test_plain_config_is_unchanged(self):
         self.assertEqual(
