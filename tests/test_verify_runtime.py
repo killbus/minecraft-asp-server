@@ -30,7 +30,7 @@ class RuntimeVerificationTests(unittest.TestCase):
         self.server.mkdir()
         self.lock_path = self.directory / "runtime.lock.json"
         self.lock = {"schema_version": 1, "datapack_directories": ["world/datapacks"], "artifacts": []}
-        self.install("server", "asp-server.jar", b"server content")
+        self.install("server", "paper-server.jar", b"server content")
         self.install("plugin", "plugins/example.jar", b"plugin content")
         self.install("datapack", "world/datapacks/example.zip", b"datapack content")
         self.save_lock()
@@ -376,7 +376,7 @@ class RuntimeVerificationTests(unittest.TestCase):
 
         self.write("world/datapacks/unpacked/pack.mcmeta", b"{}")
         self.write("plugins/extra.jar")
-        self.write("asp-server.jar", b"modified")
+        self.write("paper-server.jar", b"modified")
         (self.server / "plugins/example.jar").unlink()
         before = snapshot()
         self.assertEqual(1, self.run_verifier()[0])

@@ -1,28 +1,19 @@
 {
   "schema_version": 1,
-  "notes": "Initial observed inventory recorded on 2026-11-08. JAR hashes describe existing local files; their original downloads were not independently verified. Versions/builds come from embedded metadata and the recorded ASP boot log. Source URLs are project references unless a specific release is linked; download_url is omitted when the original fixed URL is unknown.",
+  "notes": "Observed inventory updated on 2026-11-17 for the standard Paper migration. Paper and Multiverse-Core are pinned to official release artifacts with verified SHA-256 hashes. Remaining local JAR hashes describe pre-existing files whose original downloads were not independently verified. Source URLs are project references unless a specific release is linked; download_url is omitted when the original fixed URL is unknown.",
   "datapack_directories": [
     "world/datapacks"
   ],
   "artifacts": [
     {
-      "id": "advanced-slime-paper",
+      "id": "paper",
       "kind": "server",
-      "path": "asp-server.jar",
-      "version": "26.2.build.128-stable",
-      "build": "817eeca",
-      "source": "https://infernalsuite.com/download/asp/",
-      "sha256": "d36637dc8d8a678c27726e0b3824aa80d8785bad5c3742ce1ae55f4c5c6c4740"
-    },
-    {
-      "id": "asp-plugin",
-      "kind": "plugin",
-      "path": "plugins/asp-plugin-4.2.0-SNAPSHOT.jar",
-      "version": "4.2.0-SNAPSHOT",
-      "build": "817eeca984157b410f5d507b70d4e5949574769d",
-      "source": "https://infernalsuite.com/download/asp/",
-      "notes": "Version label from the installed filename; paper-plugin.yml reports the build commit as its version. Keep paired with the server build.",
-      "sha256": "ddc2fea51764378cba8aa58c09e84b6da3e049df9fac0991e960ba39ec59015d"
+      "path": "paper-server.jar",
+      "version": "26.2-135",
+      "build": "135",
+      "source": "https://papermc.io/downloads/paper",
+      "download_url": "https://fill-data.papermc.io/v1/objects/ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1/paper-26.2-135.jar",
+      "sha256": "ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1"
     },
     {
       "id": "coreprotect",
@@ -59,6 +50,26 @@
       "build": "1299a2a",
       "source": "https://grim.ac/",
       "sha256": "080e01c5545695b7e755f705d73da49c5eae9b86d67f1425f88f2c7b414f8da9"
+    },
+    {
+      "id": "multiverse-core",
+      "kind": "plugin",
+      "path": "plugins/Multiverse-Core-5.8.1.jar",
+      "version": "5.8.1",
+      "source": "https://modrinth.com/plugin/multiverse-core",
+      "download_url": "https://cdn.modrinth.com/data/3wmN97b8/versions/YZ2Ji4IS/multiverse-core-5.8.1.jar",
+      "notes": "World registration, on-demand load/unload, teleport, and per-world settings.",
+      "sha256": "bc3f34e2d747fdf024f44868747bb016b08fa11d98ccb4ffcac958f083151a83"
+    },
+    {
+      "id": "packmanagerpro",
+      "kind": "plugin",
+      "path": "plugins/PackManagerPro.jar",
+      "version": "2.0.0",
+      "source": "https://github.com/NaspoDev/PackManagerPro",
+      "download_url": "https://github.com/NaspoDev/PackManagerPro/releases/download/2.0.0/PackManagerPro-2.0.0.jar",
+      "notes": "Per-world resource-pack selection. The configured key is the lowercased Bukkit world name.",
+      "sha256": "5abce69ea5b5a5774cc4e89cd3e0cb959b61a823bef66d81314e772f32014ad5"
     },
     {
       "id": "skinsrestorer",

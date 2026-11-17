@@ -1,11 +1,11 @@
 @echo on
 REM ============================================================
-REM  ASP server backup (Windows)
+REM  Paper server backup (Windows)
 REM
 REM  Usage:  scripts\backup.cmd [SERVER_DIR]
 REM  Default SERVER_DIR: ..\server (relative to this script)
 REM
-REM  Scope (see docs/ASP-SOP.md section 1 - not regenerable):
+REM  Scope (see docs/PAPER-WORLD-SOP.md - not regenerable):
 REM    world/ + whitelist/ban/usercache/ops json + server config
 REM    + config/ (Paper) + per-plugin config dirs (jars excluded)
 REM    Known-regenerable plugin caches are excluded (see below).
@@ -64,8 +64,8 @@ REM every early exit is `goto :finish` and the code travels in RESULT.
 set "RESULT=1"
 
 REM --- preflight ---
-if not exist "%SERVER_DIR%\asp-server.jar" (
-    echo [backup] ERROR: not a server dir: %SERVER_DIR% ^(asp-server.jar missing^)
+if not exist "%SERVER_DIR%\paper-server.jar" (
+    echo [backup] ERROR: not a server dir: %SERVER_DIR% ^(paper-server.jar missing^)
     goto :finish
 )
 
@@ -100,12 +100,12 @@ if %TGT_N% equ 0 (
     goto :finish
 )
 
-REM Refuse a torn snapshot: the ASP server must be stopped while we copy.
-REM Match the real launch shape (`java ... -jar ...\asp-server.jar`) so an
+REM Refuse a torn snapshot: the Paper server must be stopped while we copy.
+REM Match the real launch shape (`java ... -jar ...\paper-server.jar`) so an
 REM unrelated process that merely mentions the file name is not a false hit.
-powershell -NoProfile -Command "if (Get-CimInstance Win32_Process -Filter 'Name=''java.exe''' | Where-Object { $_.CommandLine -match '-jar\s+.*asp-server\.jar' }) { exit 2 } else { exit 0 }"
+powershell -NoProfile -Command "if (Get-CimInstance Win32_Process -Filter 'Name=''java.exe''' | Where-Object { $_.CommandLine -match '-jar\s+.*paper-server\.jar' }) { exit 2 } else { exit 0 }"
 if errorlevel 2 if not "%ALLOW_ONLINE%"=="1" (
-    echo [backup] ERROR: the ASP server is running; stop it first ^(or set ALLOW_ONLINE=1^)
+    echo [backup] ERROR: the Paper server is running; stop it first ^(or set ALLOW_ONLINE=1^)
     goto :finish
 )
 if errorlevel 2 echo [backup] WARN: ALLOW_ONLINE=1 - snapshot may be inconsistent
@@ -191,14 +191,14 @@ if not exist "%DEST%" set "ERRMSG=cannot create %DEST%"
 if defined ERRMSG goto :dt_fail
 
 REM --- world: mirror, runtime artifacts excluded ---
-REM world/ is a tree, not just level.dat: on this build level.dat is a
-REM slim header and the real state lives in data/ and dimensions/*/data/.
+REM world/ is a tree, not just level.dat: Paper 26.x stores every registered
+REM dimension (including Multiverse worlds) under world/dimensions/*/.
 robocopy "%SERVER_DIR%\world" "%DEST%\world" /MIR /XF session.lock level.dat_old /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 set "ERRMSG=world copy failed (robocopy exit !errorlevel!)"
 if defined ERRMSG goto :dt_fail
 
 REM --- player files + server-level config ---
-for %%f in (whitelist.json ops.json banned-ips.json banned-players.json usercache.json server.properties eula.txt bukkit.yml spigot.yml commands.yml server-icon.png) do copy /Y "%SERVER_DIR%\%%f" "%DEST%\" >nul 2>nul
+for %%f in (whitelist.json ops.json banned-ips.json banned-players.json usercache.json server.properties eula.txt bukkit.yml spigot.yml commands.yml permissions.yml server-icon.png) do copy /Y "%SERVER_DIR%\%%f" "%DEST%\" >nul 2>nul
 
 REM --- Paper config dir (paper-global.yml, paper-world-defaults.yml) ---
 if exist "%SERVER_DIR%\config" (
@@ -222,7 +222,7 @@ if defined ERRMSG goto :dt_fail
 copy /Y "%SERVER_DIR%\plugins\*.yml" "%DEST%\plugins\" >nul 2>nul
 
 REM --- manifest: hash every backed-up file (world included) ---
-powershell -NoProfile -Command "$d=(Resolve-Path -LiteralPath $env:DEST).Path; $o=@('# ASP backup ' + $env:TS); $sha=[System.Security.Cryptography.SHA256]::Create(); $fs=[System.IO.Directory]::GetFiles($d,'*',[System.IO.SearchOption]::AllDirectories); [Array]::Sort($fs,[System.StringComparer]::Ordinal); foreach ($f in $fs) { if ([System.IO.Path]::GetFileName($f) -ne 'MANIFEST.txt') { $s=[System.IO.File]::OpenRead($f); $h=([System.BitConverter]::ToString($sha.ComputeHash($s)) -replace '-','').ToLower(); $s.Dispose(); $rel=$f.Substring($d.Length+1).Replace([char]92,'/'); $o += ('{0}  ./{1}' -f $h, $rel) } }; [System.IO.File]::WriteAllText((Join-Path $d 'MANIFEST.txt'), (($o -join [char]10) + [char]10), [System.Text.Encoding]::ASCII)"
+powershell -NoProfile -Command "$d=(Resolve-Path -LiteralPath $env:DEST).Path; $o=@('# Paper backup ' + $env:TS); $sha=[System.Security.Cryptography.SHA256]::Create(); $fs=[System.IO.Directory]::GetFiles($d,'*',[System.IO.SearchOption]::AllDirectories); [Array]::Sort($fs,[System.StringComparer]::Ordinal); foreach ($f in $fs) { if ([System.IO.Path]::GetFileName($f) -ne 'MANIFEST.txt') { $s=[System.IO.File]::OpenRead($f); $h=([System.BitConverter]::ToString($sha.ComputeHash($s)) -replace '-','').ToLower(); $s.Dispose(); $rel=$f.Substring($d.Length+1).Replace([char]92,'/'); $o += ('{0}  ./{1}' -f $h, $rel) } }; [System.IO.File]::WriteAllText((Join-Path $d 'MANIFEST.txt'), (($o -join [char]10) + [char]10), [System.Text.Encoding]::ASCII)"
 if errorlevel 1 set "ERRMSG=manifest generation failed"
 if defined ERRMSG goto :dt_fail
 if not exist "%DEST%\MANIFEST.txt" set "ERRMSG=manifest file missing after generation"

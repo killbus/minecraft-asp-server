@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-#  AdvancedSlimePaper 26.2 - start script (Linux / macOS shell)
+#  Paper 26.2 - start script (Linux / macOS shell)
 #  Starts the server in the sibling server/ directory.
 #
 #  Before launching, backs up the previous session's world. The server
@@ -9,7 +9,7 @@
 #  not running 24/7.
 #  The backup is skipped when a complete one is younger than
 #  BACKUP_MIN_INTERVAL (60 min) so restart loops do not push older
-#  backups out of the retention window. Set ASP_SKIP_BACKUP=1 to start
+#  backups out of the retention window. Set PAPER_SKIP_BACKUP=1 to start
 #  without backing up at all.
 #
 #  Usage:
@@ -38,22 +38,18 @@ if [ -z "$major" ] || [ "$major" -lt 25 ]; then
     exit 1
 fi
 
-if [ ! -f asp-server.jar ]; then
-    echo "[start] ERROR: asp-server.jar not found in $(pwd)" >&2
+if [ ! -f paper-server.jar ]; then
+    echo "[start] ERROR: paper-server.jar not found in $(pwd)" >&2
     exit 1
 fi
 
 # --- pre-start backup ---
-if [ "${ASP_SKIP_BACKUP:-0}" != "1" ]; then
+if [ "${PAPER_SKIP_BACKUP:-${ASP_SKIP_BACKUP:-0}}" != "1" ]; then
     BACKUP_MIN_INTERVAL="${BACKUP_MIN_INTERVAL:-60}" "$SCRIPT_DIR/backup.sh" \
         || echo "[start] WARN: pre-start backup failed; starting the server anyway." >&2
 fi
 
 # -Xms / -Xmx: tune to available RAM. Bedrock+Java mixed load is
 # heavier than Java-only. 4G heap is a sane default for a small SMP.
-# Upstream Paper's version API describes Paper, not this ASP fork, so the
-# async startup update check can only produce noise here. The property is
-# read by MinecraftServer before it schedules that fetch.
 exec "$JAVA" -Xms2G -Xmx4G -XX:+UseG1GC \
-    -Dpaper.disableStartupVersionCheck=true \
-    -jar asp-server.jar
+    -jar paper-server.jar

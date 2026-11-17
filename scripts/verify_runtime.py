@@ -11,6 +11,8 @@ import stat
 import sys
 from urllib.parse import urlsplit
 
+SERVER_JAR = "paper-server.jar"
+
 
 class VerificationError(Exception):
     """Invalid metadata, unsafe paths, or an incomplete filesystem check."""
@@ -112,7 +114,7 @@ def read_lock(path):
         kind = artifact["kind"]
         if kind == "server":
             server_count += 1
-            valid_scope = str(path) == "asp-server.jar"
+            valid_scope = str(path) == SERVER_JAR
         elif kind == "plugin":
             valid_scope = str(path.parent) == "plugins" and path.suffix.lower() == ".jar"
         elif kind == "datapack":
@@ -122,7 +124,7 @@ def read_lock(path):
         if not valid_scope:
             raise VerificationError(f"{label}.path is outside the {kind} installation scope: {path}")
     if server_count != 1:
-        raise VerificationError("artifacts must declare exactly one server at asp-server.jar")
+        raise VerificationError(f"artifacts must declare exactly one server at {SERVER_JAR}")
     return lock
 
 
