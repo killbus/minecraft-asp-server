@@ -1,0 +1,8 @@
+#!/bin/sh
+# Reject commit subjects that mix a contract boundary with an instance.
+# Enable once per clone: git config core.hooksPath .githooks
+root=$(git rev-parse --show-toplevel) || exit 1
+if command -v python >/dev/null 2>&1; then
+    exec python "$root/scripts/check_commit_message.py" "$1"
+fi
+exec python3 "$root/scripts/check_commit_message.py" "$1"
