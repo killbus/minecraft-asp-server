@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 9
 - **Last Active**: 2026-11-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~253 | Active |
+| `journal-1.md` | ~275 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-11-17 | Paper + Multiverse world switching | `01cd4a1` | `feat/paper-anvil-world-switching` |
 | 8 | 2026-11-17 | Certificate expiry observability for shared TCP | `7512374` | `rewrite/main-20261115` |
 | 7 | 2026-11-17 | LAN Java entry under shared-TCP PROXY mode | `d499458` | `rewrite/main-20261115` |
 | 6 | 2026-11-17 | Declarative mixed frpc scenes | `757c451` | `rewrite/main-20261115` |

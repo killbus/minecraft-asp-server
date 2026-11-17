@@ -251,3 +251,25 @@ frpc-shared-tcp now reports each --tls-cert subject, SANs, notAfter, remaining d
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: Paper + Multiverse world switching
+<!-- trellis-session: v=2 fp=9325fc180fc9cdfd -->
+
+**Date**: 2026-11-17
+**Task**: Paper + Multiverse world switching
+**Branch**: `feat/paper-anvil-world-switching`
+
+### Summary
+
+Migrated the adventure map off AdvancedSlimePaper to Paper 26.2 + Multiverse-Core 5.8.1. Trials runs as a 47-region Anvil dimension loaded on demand (12.9s first load, 994ms after, ~48MB heap delta) and unloaded when idle. Restored r.-1.3/r.0.3: ASP's importer rejected their 644 pre-1.13 chunks, while Paper's lazy DataFixer upgrades them correctly (probe: 12 chunks, ~17s, blocks preserved). Added artifacts.lock.json plus idempotent rebuild/verify scripts and tests (211 total, OK). Pinned logins to the hub so an unloaded trials cannot strand returning players. Documented operations in docs/PAPER-WORLD-SOP.md and the artifact contract in .trellis/spec/backend/world-artifacts.md.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `01cd4a1` | feat(world): run the adventure map on Paper + Multiverse |
+
+### Status
+
+[OK] **Completed**
