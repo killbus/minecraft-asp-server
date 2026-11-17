@@ -41,7 +41,7 @@ SCRIPT_DIR="$(pwd)"
 #  Paths may contain spaces.
 #
 #      ../backups
-#      /mnt/usb/asp-backups
+#      /mnt/usb/paper-backups
 #
 #  The FIRST entry is the primary target: if it fails, the whole run
 #  fails. Every later entry is a mirror: a mirror failure prints a
@@ -175,14 +175,13 @@ do_target() {
     # world/ is a tree, not just level.dat: Paper 26.x stores every registered
     # dimension (including Multiverse worlds) under world/dimensions/*/.
     mkdir -p "$dest/world" || return 1
-    tar cf - --exclude=./session.lock --exclude=./level.dat_old -C "$SERVER_DIR/world" . | tar xf - -C "$dest/world"
+    tar cf - --exclude=session.lock --exclude=level.dat_old -C "$SERVER_DIR/world" . | tar xf - -C "$dest/world"
 
     # sh has no pipefail, so a failed `tar cf` on the left of the pipe would
     # be invisible. Count files instead: COMPLETE must mean every source
     # file is here.
     src_count=$(find "$SERVER_DIR/world" -type f \
-        ! -path "$SERVER_DIR/world/session.lock" \
-        ! -path "$SERVER_DIR/world/level.dat_old" | wc -l)
+        ! -name session.lock ! -name level.dat_old | wc -l)
     dst_count=$(find "$dest/world" -type f | wc -l)
     if [ "$src_count" -ne "$dst_count" ]; then
         echo "[backup] ERROR: world copy incomplete ($dst_count of $src_count files): $dest" >&2
@@ -210,7 +209,7 @@ do_target() {
     fi
 
     # --- plugin dirs: config + data, jars excluded ---
-    # Only caches proven regenerable in docs/ASP-SOP.md section 1 are
+    # Only caches proven regenerable in docs/PAPER-WORLD-SOP.md section 7 are
     # excluded. Do not widen this to every */cache/: a plugin may keep
     # real state in a directory with that name.
     mkdir -p "$dest/plugins" || return 1
@@ -235,6 +234,9 @@ do_target() {
         fi
     done
     cp "$SERVER_DIR"/plugins/*.yml "$dest/plugins/" 2>/dev/null || true
+
+    # Resource packs under packs/ are externally sourced and regenerable;
+    # they stay out of the snapshot. Rebuild recipe and hash: PAPER-WORLD-SOP.md §4.
 
     # --- manifest: hash every backed-up file (world included) ---
     {

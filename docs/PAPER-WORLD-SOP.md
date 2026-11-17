@@ -221,6 +221,36 @@ PackManagerPro sends the pack on join and on `PlayerChangedWorldEvent`. A world
 with an empty `pack-url` clears the previous pack. Restart the server or run
 `pmp reload` after editing the file.
 
+The pack file lives in `server/packs/` and is served by a plain HTTP server:
+
+```powershell
+scripts\serve-packs.cmd          # python -m http.server 8000 --directory server\packs
+```
+
+```sh
+scripts/serve-packs.sh           # PACK_PORT=8000 by default
+```
+
+`PackManagerPro` sends the URL to the client, so `127.0.0.1` only reaches a
+client running on this machine. For remote Java clients, point `pack-url` at an
+address they can reach, or keep the pack behind the same proxy/Geyser path the
+players already use. Verify with the HTTP access log after `/mvtp trials`.
+
+`server/packs/` is externally sourced and regenerable, so it is deliberately
+**not** part of the server snapshots. Record the variant instead:
+
+- upstream: `MS Painted for 26.1-26.3 (v2.49)` by Stridey;
+- local variants differ only in `pack.mcmeta`'s `description`
+  (`MS Painted - test_world` for `pack-a.zip`,
+  `MS Painted - test_nether` for `pack-b.zip`); all 11,802 archive entries
+  are otherwise identical;
+- `pack-a.zip` sha256:
+  `72cafcfa3a780de9485d686d7afe2d69e07582f7ab10ad9c02ccaf4edb0928bb`.
+
+Rebuild by unzipping the upstream pack, editing that description, and
+rezipping. A rezip need not reproduce the byte-identical archive, so use the
+hash to detect drift rather than as a download guarantee.
+
 ## 5. Permissions
 
 The MVP can run with OP-only staff. For ordinary players, grant the specific
@@ -301,6 +331,13 @@ end, and `trials` together. The backup scripts also include:
 - `plugins/PackManagerPro/config.yml`
 - `permissions.yml`
 - `server.properties` and `config/`
+
+Geyser and SkinsRestorer `cache/` directories are regenerable and excluded;
+do not widen that exclusion to other plugins without checking their state.
+Resource packs under `packs/` are excluded for the same reason; their
+rebuild recipe and `pack-a.zip` hash are in section 4.
+With the Trials dimension imported, one snapshot is roughly 0.5 GB; the
+default `KEEP=5` therefore needs about 2.5 GB per target.
 
 `server/world/data/minecraft/maps/` is shared by all dimensions. Increasing
 the map count changes this directory, so it must stay in world backups.

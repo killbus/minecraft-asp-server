@@ -103,12 +103,19 @@ if %TGT_N% equ 0 (
 REM Refuse a torn snapshot: the Paper server must be stopped while we copy.
 REM Match the real launch shape (`java ... -jar ...\paper-server.jar`) so an
 REM unrelated process that merely mentions the file name is not a false hit.
-powershell -NoProfile -Command "if (Get-CimInstance Win32_Process -Filter 'Name=''java.exe''' | Where-Object { $_.CommandLine -match '-jar\s+.*paper-server\.jar' }) { exit 2 } else { exit 0 }"
+powershell -NoProfile -Command "try { $p = Get-CimInstance Win32_Process -Filter 'Name=''java.exe''' -ErrorAction Stop | Where-Object { $_.CommandLine -match '-jar\s+.*paper-server\.jar' }; if ($p) { exit 2 } } catch { exit 3 }; exit 0"
+if %errorlevel% equ 3 (
+    echo [backup] ERROR: cannot determine whether the Paper server is running
+    if not "%ALLOW_ONLINE%"=="1" goto :finish
+    echo [backup] WARN: ALLOW_ONLINE=1 - running check skipped
+    goto :running_check_done
+)
 if errorlevel 2 if not "%ALLOW_ONLINE%"=="1" (
     echo [backup] ERROR: the Paper server is running; stop it first ^(or set ALLOW_ONLINE=1^)
     goto :finish
 )
 if errorlevel 2 echo [backup] WARN: ALLOW_ONLINE=1 - snapshot may be inconsistent
+:running_check_done
 
 REM --- optional: skip only when EVERY target is already up to date ---
 REM A target that fell behind (unplugged disk, new target added) forces a
@@ -208,7 +215,7 @@ if exist "%SERVER_DIR%\config" (
 if defined ERRMSG goto :dt_fail
 
 REM --- plugin dirs: config + data, jars excluded ---
-REM Only caches proven regenerable in docs/ASP-SOP.md section 1 are
+REM Only caches proven regenerable in docs/PAPER-WORLD-SOP.md section 7 are
 REM excluded. Do not widen this to every */cache/: a plugin may keep
 REM real state in a directory with that name.
 for /d %%d in ("%SERVER_DIR%\plugins\*") do (
@@ -220,6 +227,9 @@ for /d %%d in ("%SERVER_DIR%\plugins\*") do (
 )
 if defined ERRMSG goto :dt_fail
 copy /Y "%SERVER_DIR%\plugins\*.yml" "%DEST%\plugins\" >nul 2>nul
+
+REM Resource packs under packs/ are externally sourced and regenerable; they
+REM stay out of the snapshot. Rebuild recipe and hash: PAPER-WORLD-SOP.md §4.
 
 REM --- manifest: hash every backed-up file (world included) ---
 powershell -NoProfile -Command "$d=(Resolve-Path -LiteralPath $env:DEST).Path; $o=@('# Paper backup ' + $env:TS); $sha=[System.Security.Cryptography.SHA256]::Create(); $fs=[System.IO.Directory]::GetFiles($d,'*',[System.IO.SearchOption]::AllDirectories); [Array]::Sort($fs,[System.StringComparer]::Ordinal); foreach ($f in $fs) { if ([System.IO.Path]::GetFileName($f) -ne 'MANIFEST.txt') { $s=[System.IO.File]::OpenRead($f); $h=([System.BitConverter]::ToString($sha.ComputeHash($s)) -replace '-','').ToLower(); $s.Dispose(); $rel=$f.Substring($d.Length+1).Replace([char]92,'/'); $o += ('{0}  ./{1}' -f $h, $rel) } }; [System.IO.File]::WriteAllText((Join-Path $d 'MANIFEST.txt'), (($o -join [char]10) + [char]10), [System.Text.Encoding]::ASCII)"
