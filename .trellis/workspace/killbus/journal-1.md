@@ -207,3 +207,25 @@ Added per-process frpc scene manifests, official-frpc UDP PROXY v2 support, shar
 ### Next Steps
 
 - Use the operator-owned scene for two TCP entries plus the official frpc UDP tunnel
+
+
+## Session 7: LAN Java entry under shared-TCP PROXY mode
+<!-- trellis-session: v=2 fp=f8125a2f3a3fcb36 -->
+
+**Date**: 2026-11-17
+**Task**: LAN Java entry under shared-TCP PROXY mode
+**Branch**: `rewrite/main-20261115`
+
+### Summary
+
+Added an automatic plain Java frontend on 0.0.0.0:25564 when frpc-shared-tcp runs with --proxy-protocol; HAProxy injects PROXY v2 so Paper sees the LAN client address. Covered endpoint validation, hand-written-config ownership, and 32 scene tests. Disabled Geyser debug-mode in the local runtime config.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d499458` | feat(scenes): add LAN Java frontend in PROXY mode |
+
+### Status
+
+[OK] **Completed**

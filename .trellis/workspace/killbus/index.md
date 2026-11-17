@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-11-17
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~209 | Active |
+| `journal-1.md` | ~231 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-11-17 | LAN Java entry under shared-TCP PROXY mode | `d499458` | `rewrite/main-20261115` |
 | 6 | 2026-11-17 | Declarative mixed frpc scenes | `757c451` | `rewrite/main-20261115` |
 | 5 | 2026-11-16 | SOP: advertise-addresses may be a host name | `9c8c3ba` | `rewrite/main-20261115` |
 | 4 | 2026-11-16 | Bedrock media relay: SOP subsection 10.1.2 | `30d56d4`, `acfdb66`, `e1b1179` | `rewrite/main-20261115` |
