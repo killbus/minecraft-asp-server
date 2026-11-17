@@ -41,6 +41,7 @@
 #    --java       127.0.0.1:25565
 #    --bedrock    127.0.0.1:19132
 #    --tls-listen 127.0.0.1:25567 (only with --tls-cert)
+#    LAN Java     0.0.0.0:25564  (automatic with --proxy-protocol)
 #
 #  Without --haproxy-config the scene writes a generated HAProxy
 #  config to .tmp/frpc-shared-tcp/haproxy.cfg (gitignored). The frpc
@@ -61,6 +62,14 @@
 #  (Paper proxies.proxy-protocol; Geyser advanced.java.use-haproxy-protocol).
 #  scripts/probe_public_entry.py --proxy-protocol speaks it for the
 #  local-mux checks. Nothing else about the configuration moves.
+#
+#  --proxy-protocol also adds a plain frontend for LAN Java clients. It
+#  accepts the client's ordinary Minecraft connection and sends it to
+#  the same Java backend, which carries the send-proxy-v2 directive, so
+#  Paper still receives a header and keeps the real LAN address.
+#  MUX_LAN_JAVA overrides its bind; the default is 0.0.0.0:25564, so an
+#  operator who does not want that exposure should choose a specific LAN
+#  address or supply a hand-written HAProxy configuration.
 #
 #  With --tls-cert the scene terminates TLS itself: the shared port
 #  keeps the ClientHello on a second loopback bind (--tls-listen)
@@ -112,6 +121,7 @@ MUX_LISTEN=${MUX_LISTEN:-127.0.0.1:25566}
 MUX_JAVA=${MUX_JAVA:-127.0.0.1:25565}
 MUX_BEDROCK=${MUX_BEDROCK:-127.0.0.1:19132}
 MUX_TLS_LISTEN=${MUX_TLS_LISTEN:-127.0.0.1:25567}
+MUX_LAN_JAVA=${MUX_LAN_JAVA:-0.0.0.0:25564}
 MUX_STOP_TIMEOUT=${MUX_STOP_TIMEOUT:-10}
 
 # Captured before the C locale below, which belongs to this script alone.
@@ -289,14 +299,14 @@ is_endpoint() {
 
 # Print the generated HAProxy config for one listen/java/bedrock set.
 # A non-empty $4 turns on TLS termination: the ClientHello is handed to a
-# second loopback bind ($5) that HAProxy decrypts with the PEMs in $4 (one
-# per line, one `crt` each, so SNI chooses between several names), so Geyser
-# receives plain HTTP and needs no certificate of its own. $6 is 1 to add
-# `strict-sni`, which refuses a ClientHello no certificate covers. $7 is 1 to
-# speak PROXY protocol v2 on the shared port: `accept-proxy` on its bind and
+# second bind ($5) that HAProxy decrypts with the PEMs in $4 (one per line,
+# one `crt` each, so SNI chooses between several names), so Geyser receives
+# plain HTTP and needs no certificate of its own. $6 is 1 to add `strict-sni`,
+# which refuses a ClientHello no certificate covers. $7 is 1 to speak PROXY
+# protocol v2 on the shared port: `accept-proxy` on its bind and
 # `send-proxy-v2` to the Java backend, so Paper sees the real client address
-# instead of 127.0.0.1. Only those two lines move; the default config is
-# unchanged.
+# instead of 127.0.0.1. $8, when non-empty, is a plain LAN Java bind that
+# reaches that same Java backend, which supplies the header for it.
 print_haproxy_config() {
     _ph_listen=$1
     _ph_java=$2
@@ -304,6 +314,7 @@ print_haproxy_config() {
     _ph_tls_certs=$4
     _ph_tls_listen=$5
     _ph_strict_sni=$6
+    _ph_lan_java=$8
     _ph_accept_proxy=
     _ph_send_proxy=
     if [ "${7:-0}" -eq 1 ]; then
@@ -369,6 +380,16 @@ backend geyser_signaling
 backend java
     server paper $_ph_java$_ph_send_proxy
 EOF
+    if [ -n "$_ph_lan_java" ]; then
+        cat <<EOF
+
+# LAN Java clients use an ordinary connection; this frontend adds the
+# PROXY v2 header that Paper expects through the shared java backend.
+frontend lan_java
+    bind $_ph_lan_java
+    default_backend java
+EOF
+    fi
     if [ -n "$_ph_tls_certs" ]; then
         cat <<EOF
 
@@ -401,7 +422,7 @@ generate_haproxy_config() {
     esac
     mkdir -p "$_gh_dir" || return 1
     _gh_tmp=${_gh_cfg}.tmp.$$
-    if ! print_haproxy_config "$2" "$3" "$4" "$5" "$6" "${7:-0}" "${8:-0}" > "$_gh_tmp"; then
+    if ! print_haproxy_config "$2" "$3" "$4" "$5" "$6" "${7:-0}" "${8:-0}" "${9:-}" > "$_gh_tmp"; then
         rm -f "$_gh_tmp"
         return 1
     fi
@@ -446,21 +467,25 @@ spawn_window() {
     tmux respawn-window -k -t "$_sw_id" "$_sw_command"
 }
 
-# Return 0 when LISTEN is accepting TCP, 1 when it is not, 2 when no
+# Return 0 when endpoint $1 is accepting TCP, 1 when it is not, 2 when no
 # listening-socket tool is available (caller may then trust the window).
-mux_listen_check() {
-    _ml_port=${LISTEN##*:}
+endpoint_listen_check() {
+    _el_port=${1##*:}
     for _ml_tool in 'ss -ltn' 'netstat -ltn'; do
         _ml_bin=${_ml_tool%% *}
         command -v "$_ml_bin" >/dev/null 2>&1 || continue
         if _ml_out=$($_ml_tool 2>/dev/null); then
-            if printf '%s\n' "$_ml_out" | awk '{print $4}' | grep -F ":$_ml_port" >/dev/null 2>&1; then
+            if printf '%s\n' "$_ml_out" | awk '{print $4}' | grep -F ":$_el_port" >/dev/null 2>&1; then
                 return 0
             fi
             return 1
         fi
     done
     return 2
+}
+
+mux_listen_check() {
+    endpoint_listen_check "$LISTEN"
 }
 
 # Wait for the HAProxy window to stay alive and bind the listen port.
@@ -711,6 +736,7 @@ cmd_up() {
     LISTEN=$MUX_LISTEN
     JAVA=$MUX_JAVA
     BEDROCK=$MUX_BEDROCK
+    LAN_JAVA=$MUX_LAN_JAVA
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -828,6 +854,19 @@ cmd_up() {
             exit 2
         fi
     done
+    if [ "$PROXY_PROTOCOL" -eq 1 ] && [ -z "$_haproxy_config" ]; then
+        if ! is_endpoint "$LAN_JAVA"; then
+            echo "[frpc-shared] ERROR: not HOST:PORT (IPv6 needs brackets): $LAN_JAVA" >&2
+            exit 2
+        fi
+        _lan_java_port=${LAN_JAVA##*:}
+        for _endpoint in "$LISTEN" "$JAVA" "$BEDROCK"; do
+            if [ "${_endpoint##*:}" = "$_lan_java_port" ]; then
+                echo "[frpc-shared] ERROR: MUX_LAN_JAVA must differ from --listen/--java/--bedrock: $LAN_JAVA" >&2
+                exit 2
+            fi
+        done
+    fi
     if [ -z "$TLS_CERTS" ]; then
         if [ "$_tls_listen_set" -eq 1 ]; then
             echo "[frpc-shared] ERROR: --tls-listen needs --tls-cert" >&2
@@ -852,6 +891,11 @@ cmd_up() {
                 exit 2
                 ;;
         esac
+        if [ "$PROXY_PROTOCOL" -eq 1 ] && [ -z "$_haproxy_config" ] && \
+            [ "${TLS_LISTEN##*:}" = "${LAN_JAVA##*:}" ]; then
+            echo "[frpc-shared] ERROR: --tls-listen must differ from MUX_LAN_JAVA: $TLS_LISTEN" >&2
+            exit 2
+        fi
         # Every certificate is checked on its own, and kept as an absolute
         # path: HAProxy reads one `crt` per name and chooses between them by
         # SNI, so a name with a broken PEM must not get as far as the bind.
@@ -948,12 +992,16 @@ cmd_up() {
     quote_sh "$ROOT"
     _root_quoted=$_q_result
     _server_command='bash scripts/start.sh'
+    _lan_java_config=
+    if [ "$PROXY_PROTOCOL" -eq 1 ] && [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
+        _lan_java_config=$LAN_JAVA
+    fi
 
     if [ "$_dry_run" -eq 1 ]; then
         if [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
             printf '# frpc-shared: would generate HAProxy config %s\n' "$_haproxy_config"
             print_haproxy_config "$LISTEN" "$JAVA" "$BEDROCK" "$TLS_CERTS" "$TLS_LISTEN" \
-                "$STRICT_SNI" "$PROXY_PROTOCOL"
+                "$STRICT_SNI" "$PROXY_PROTOCOL" "$_lan_java_config"
         else
             printf '# frpc-shared: would use HAProxy config %s\n' "$_haproxy_config"
         fi
@@ -992,6 +1040,15 @@ cmd_up() {
             "$LISTEN" >&2
         exit 3
     fi
+    if [ -n "$_lan_java_config" ]; then
+        _pre_lan_rc=0
+        endpoint_listen_check "$LAN_JAVA" || _pre_lan_rc=$?
+        if [ "$_pre_lan_rc" -eq 0 ]; then
+            printf '[frpc-shared] ERROR: something already listens on LAN Java %s; run down or stop it first\n' \
+                "$LAN_JAVA" >&2
+            exit 3
+        fi
+    fi
 
     require_frpc || exit 1
     if [ -z "$TMUX_BIN" ]; then
@@ -1025,7 +1082,7 @@ cmd_up() {
 
     if [ -z "$_haproxy_config" ] || [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
         if ! generate_haproxy_config "$_haproxy_config" "$LISTEN" "$JAVA" "$BEDROCK" \
-            "$TLS_CERTS" "$TLS_LISTEN" "$STRICT_SNI" "$PROXY_PROTOCOL"; then
+            "$TLS_CERTS" "$TLS_LISTEN" "$STRICT_SNI" "$PROXY_PROTOCOL" "$_lan_java_config"; then
             echo "[frpc-shared] ERROR: cannot write HAProxy config: $_haproxy_config" >&2
             exit 1
         fi

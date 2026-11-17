@@ -43,6 +43,7 @@ Shared-TCP composition:
 ```sh
 scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> ...
 scripts/scenes/frpc-shared-tcp.sh up --scene <file> ...
+scripts/scenes/frpc-shared-tcp.sh up --scene <file> --proxy-protocol
 ```
 
 `--config` and `--scene` are mutually exclusive in both scripts.
@@ -61,6 +62,20 @@ scripts/scenes/frpc-shared-tcp.sh attach
 
 The read/stop verbs do not accept a scene file. A non-default scene session is
 addressed with `FRPC_SESSION`.
+
+`--proxy-protocol` also emits the default LAN Java frontend. It uses
+`MUX_LAN_JAVA=0.0.0.0:25564` and adds:
+
+```haproxy
+frontend lan_java
+    bind 0.0.0.0:25564
+    default_backend java
+```
+
+The frontend accepts an ordinary LAN Java connection; the shared `java`
+backend carries `send-proxy-v2`, so Paper still sees a PROXY v2 header. The
+frontend is emitted only for the generated configuration. A hand-written
+`--haproxy-config` owns the whole file and must add the frontend itself.
 
 ### 3. Contracts
 
@@ -182,6 +197,8 @@ all frpc sidecars -> HAProxy binds -> server starts
 | missing `--config` and `--scene` | exit 2 |
 | `--scene` and `--config` together | exit 2, mutually exclusive |
 | duplicate scene path option | exit 2 |
+| invalid `MUX_LAN_JAVA` in generated PROXY mode | exit 2 |
+| `MUX_LAN_JAVA` collides with another bind | exit 2 |
 | missing/unreadable scene file | exit 2 |
 | missing `session` or `server` | exit 2 |
 | invalid `server` value | exit 2 |
@@ -263,6 +280,11 @@ config = udp.toml
 - `--scene`/`--config` mutual exclusion;
 - multiple sidecars start before the mux and server;
 - a manifest parser error keeps exit 2 through the wrapper.
+- `--proxy-protocol` adds the LAN frontend by default, and its traffic
+  reaches the `send-proxy-v2` backend;
+- `MUX_LAN_JAVA` can override the bind and is rejected when malformed or
+  when it collides with another endpoint;
+- a hand-written config keeps ownership of its whole file.
 
 `tests/test_probe_public_udp.py` must assert PROXY v2 parsing, including that
 `LOCAL` ignores populated address fields. The probe is diagnostic only and

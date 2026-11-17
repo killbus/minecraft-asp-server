@@ -421,12 +421,14 @@ Baseline `plugins/LoginTo/config.yml` on this server:
 - [ ] `Done (..s)` present, no ERROR-level log lines
 - [ ] All target plugins `Enabling`
 - [ ] Port 25565 listening (`netstat -ano | findstr 25565`)
-- [ ] Java client can join TCP 25565. A Bedrock client joins the NetherNet
-      entry point, not the UDP port: the `*.wdn.gg:443` address from the
-      `Registered with the external signaling service. Players can join
-      at ...` line, or the built-in signalling TCP port (see 4.2). A
-      client pointed at UDP 19132 or at 25565 fails with no server-side
-      connection record
+- [ ] Java client can join the configured entry: TCP `25565` directly only
+      while PROXY protocol is off; with `--proxy-protocol`, use the public
+      frpc entry or the default LAN Java frontend (10.1.1). A Bedrock
+      client joins the NetherNet entry point, not the UDP port: the
+      `*.wdn.gg:443` address from the `Registered with the external signaling
+      service. Players can join at ...` line, or the built-in signalling TCP
+      port (see 4.2). A client pointed at UDP 19132 or at the wrong Java
+      entry fails with no server-side connection record
 - [ ] `bedrock.signaling.advertise-addresses` names the public entry and
       external UDP port of the NetherNet listener (here: a host name, see
       4.2), and the boot log shows enabled signalling plus the
@@ -813,6 +815,7 @@ generated configuration is the one reported.
 | `127.0.0.1:25565` | Java server (default backend) |
 | `127.0.0.1:19132` | Geyser NetherNet TCP signalling |
 | `127.0.0.1:25567` (TLS, default) | TLS termination for the ClientHello, only with `--tls-cert` |
+| `0.0.0.0:25564` (LAN, default with PROXY) | plain Java entry that injects PROXY v2 when `--proxy-protocol` is used |
 
 Classification: a TLS ClientHello (`req.ssl_hello_type 1`) or an HTTP
 method / HTTP/2 preface goes to Geyser; a Java legacy ping (`0xFE`) or a
@@ -1186,6 +1189,24 @@ the header, and is refused. A LAN client has to arrive through a frontend
 that accepts the plain connection and adds `send-proxy-v2` to the Java
 backend (or through the public frpc entry); alternatively turn the whole
 four-part switch off and use `25565` directly.
+
+The scene generates that LAN frontend automatically whenever
+`--proxy-protocol` is used:
+
+```sh
+sh scripts/scenes/frpc-shared-tcp.sh up \
+  --scene ~/asp-frpcs/minecraft.scene \
+  --proxy-protocol --no-attach
+```
+
+It adds a plain `frontend lan_java` bound to `0.0.0.0:25564` by default.
+That frontend accepts a normal Java client and routes it to the same
+`backend java` as the public mux, so HAProxy still supplies the PROXY v2
+header and Paper keeps the LAN client's address. `MUX_LAN_JAVA=HOST:PORT`
+overrides the bind. The default binds every interface; choose an explicit
+LAN address or firewall the port if that exposure is not wanted. A
+hand-written `--haproxy-config` still owns the whole file, so add the
+frontend there if that mode is used.
 
 Acceptance, on the host: a boot/login line `<name>[/<real-public-ip>:
 <port>] logged in with entity id ...` where the address is the player's,
