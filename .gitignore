@@ -2,6 +2,9 @@
 server/
 *.jar
 
+# immutable import sources, described by artifacts.lock.json (scripts/verify_artifacts.py)
+artifacts/
+
 # scratch
 .tmp/
 

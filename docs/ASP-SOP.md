@@ -1,5 +1,10 @@
 # AdvancedSlimePaper (ASP) Operations SOP
 
+> **Legacy / rollback only.** The active runtime is now standard Paper 26.2
+> with Multiverse-Core. Use [PAPER-WORLD-SOP.md](./PAPER-WORLD-SOP.md) for
+> normal operations. Keep this document only for restoring the archived ASP
+> engine from `server/.rollback/asp-<timestamp>/`.
+
 How to take an ASP server from scratch to production-ready.
 Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-14.
 
@@ -201,7 +206,7 @@ a result; do not overwrite a stored hash just to make the check green.
 
 Scan boundaries are deliberately narrow:
 
-- Direct `server/*.jar` (the declared server must be `asp-server.jar`).
+- Direct `server/*.jar` (the declared server must be `paper-server.jar`).
 - Direct `server/plugins/*.jar`; no recursion into plugin directories.
 - Direct ZIP files in each explicitly listed `datapack_directories`
   entry, currently `world/datapacks`. An unpacked directory containing

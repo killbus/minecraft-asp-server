@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "notes": "Immutable import sources kept outside git under artifacts/. Paths are relative to the repository root. treeSha256 covers every regular file: sorted '<sha256>  <relative posix path>' lines, newline-terminated, hashed with SHA-256. Verify with scripts/verify_artifacts.py; do not edit these trees in place.",
+  "artifacts": [
+    {
+      "name": "trials-legacy",
+      "path": "artifacts/trials-legacy",
+      "kind": "minecraft-anvil-crop",
+      "source": "https://www.minecraftmaps.com/52637-trials-of-the-past",
+      "sourceArchive": "trials-of-the-past-52637.rar",
+      "crop": {
+        "x": [
+          -2560,
+          511
+        ],
+        "z": [
+          -512,
+          3583
+        ]
+      },
+      "regions": 47,
+      "chunks": 43886,
+      "dataVersion": {
+        "min": 922,
+        "max": 4903,
+        "missingRoot": 644
+      },
+      "files": 294,
+      "bytes": 367030497,
+      "treeSha256": "e3896e8ddaac73078bbb379ecb7bcfcedbffe831d4c094000aaf5d91448c67bc",
+      "rebuild": {
+        "tool": "scripts/import_trials.py",
+        "regionCrop": {
+          "x": [
+            -5,
+            0
+          ],
+          "z": [
+            -1,
+            6
+          ]
+        }
+      },
+      "legacyChunksWithoutRootDataVersion": 644
+    }
+  ]
+}

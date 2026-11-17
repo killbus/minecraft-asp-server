@@ -1,0 +1,29 @@
+{
+  "id": "anvil-world-switching",
+  "name": "anvil-world-switching",
+  "title": "Anvil multi-world switching",
+  "description": "Replace the Slime-backed adventure world with an on-demand Paper Anvil dimension managed by Multiverse-Core, preserving per-world resource packs and validating load/unload behavior.",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "killbus",
+  "assignee": "killbus",
+  "createdAt": "2026-11-17",
+  "completedAt": "2026-11-17",
+  "branch": "feat/paper-anvil-world-switching",
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "title": "Anvil multi-world switching",
+    "description": "Replace the large Slime world with an on-demand Anvil world and add a mature multi-world switching layer, preserving per-world resource packs and permissions."
+  }
+}
