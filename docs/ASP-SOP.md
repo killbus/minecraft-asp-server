@@ -892,7 +892,7 @@ its own.
 | `127.0.0.1:19132` | Geyser NetherNet TCP signalling |
 | `127.0.0.1:25567` (TLS, default) | TLS termination for the ClientHello, only with `--tls-cert` |
 | `0.0.0.0:25564` (LAN, default with PROXY) | plain Java entry that injects PROXY v2 when `--proxy-protocol` is used |
-| `127.0.0.1:8000` (opt-in) | resource-pack HTTP server, reached only through `--packs` (10.1.3) |
+| `127.0.0.1:8000` (opt-in) | resource-pack HTTP server, reached only through `--packs`/`--serve-packs` (10.1.3) |
 
 Classification: a TLS ClientHello (`req.ssl_hello_type 1`) or an HTTP
 method / HTTP/2 preface goes to Geyser; a Java legacy ping (`0xFE`) or a
@@ -1276,7 +1276,7 @@ The scene generates that LAN frontend automatically whenever
 ```sh
 sh scripts/scenes/frpc-shared-tcp.sh up \
   --scene ~/asp-frpcs/minecraft.scene \
-  --proxy-protocol --no-attach
+  --proxy-protocol --serve-packs --no-attach
 ```
 
 It adds a plain `frontend lan_java` bound to `0.0.0.0:25564` by default.
@@ -1394,14 +1394,23 @@ literal path segment - leading and trailing `/`, only `A-Za-z0-9._~/-`, no
 `//` and no `..` - and `/` is refused because it would swallow every
 plaintext request. The backend stays in `mode tcp` like the rest of the
 mux: HAProxy reads the bytes for the ACL and forwards the connection
-unchanged. When the prefix is not the default, export the same
-`MUX_PACKS_PREFIX` for the pack server as well; the two have to agree.
+unchanged. Only `--packs` takes it: that form declares a backend this scene
+does not own, so the operator is also the one who has to state the prefix
+that backend serves.
 
-Start the pack server on that endpoint (`scripts/serve-packs.cmd` or
-`scripts/serve-packs.sh`). It serves `server/packs/` under the same prefix,
-because the mux forwards the request path unchanged; without that mapping
-the backend would look for `server/packs/packs/<file>`. Then point
-PackManagerPro at the public address:
+`--serve-packs` declares that the backend is this entry's own and removes
+that second statement. The endpoint is `127.0.0.1:8000` (`--packs-port`
+moves the port), the prefix is the served directory's name - `server/packs`
+is `/packs/` - and the entry starts `scripts/serve-packs.sh` in a `packs`
+window with exactly those two values on its command line. Nothing in that
+mode reads `PACK_PORT` or `MUX_PACKS_PREFIX` to get them: a value with one writer and
+two readers cannot disagree with itself, but two independent readers of a
+host-level environment variable can, and the failure looks like a working
+mux plus a 503.
+
+Either form serves `server/packs/`, because the mux forwards the request path
+unchanged; without the mapping the backend would look for
+`server/packs/packs/<file>`. Point PackManagerPro at the public address:
 
 ```yaml
 pack-url: http://<public-ip>:<port>/packs/pack-a.zip
@@ -1412,12 +1421,14 @@ the pack metadata, so a modified file is rejected by the client. A client
 made to speak HTTPS sends a ClientHello instead, takes the existing TLS
 branch, and never reaches this ACL.
 
-The scene refuses `--packs` with a malformed endpoint, a port already used
+The scene refuses both forms with a malformed endpoint, a port already used
 by `--listen`, `--java`, `--bedrock`, `--tls-listen` or `MUX_LAN_JAVA`, a
 malformed prefix, or a hand-written `--haproxy-config` (that file owns the
-whole configuration). At start it warns, without failing, when nothing
-listens on the packs endpoint yet. While the backend is down, only
-`<prefix>*` answers 503; Java and Bedrock are unaffected.
+whole configuration). With `--packs` it warns, without failing, when nothing
+listens on that endpoint yet: the process is not this entry's to check. With
+`--serve-packs` the same silence is a failed start, because the entry started
+that process. While the backend is down, only `<prefix>*` answers 503; Java
+and Bedrock are unaffected.
 
 `reload` only re-reads the file already on disk; it does not regenerate it.
 So rollback is `down` and then `up` without `--packs`: `up` is what rewrites

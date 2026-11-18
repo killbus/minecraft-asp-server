@@ -2,6 +2,8 @@
 
 import http.client
 import functools
+import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -13,6 +15,7 @@ from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SH = shutil.which("sh")
 
 
 class PrefixedServerTests(unittest.TestCase):
@@ -75,6 +78,51 @@ class PrefixedServerTests(unittest.TestCase):
 
         self.assertEqual(2, result.returncode)
         self.assertIn("must start and end with '/'", result.stderr)
+
+
+@unittest.skipIf(SH is None, "POSIX sh is not available")
+class WrapperArgumentTests(unittest.TestCase):
+    """The port is one command-line value, not a variable two processes read."""
+
+    def setUp(self):
+        self.directory = self.enterContext(scratch.directory("serve-packs-wrapper-"))
+        self.bin = self.directory / "bin"
+        self.bin.mkdir()
+        python = self.bin / "python3"
+        python.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
+        python.chmod(0o755)
+        self.environment = dict(os.environ)
+        self.environment["PATH"] = os.pathsep.join(
+            [self.bin.as_posix(), self.environment["PATH"]]
+        )
+
+    def test_the_wrapper_passes_its_arguments_through(self):
+        result = subprocess.run(
+            [SH, (ROOT / "scripts" / "serve-packs.sh").as_posix(),
+             "--port", "9123", "--prefix", "/custom-packs/"],
+            cwd=self.directory, capture_output=True, text=True,
+            env=self.environment,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            [
+                "scripts/serve_packs.py",
+                "--port", "9123",
+                "--prefix", "/custom-packs/",
+            ],
+            result.stdout.splitlines(),
+        )
+
+    def test_the_wrapper_does_not_invent_a_port(self):
+        result = subprocess.run(
+            [SH, (ROOT / "scripts" / "serve-packs.sh").as_posix()],
+            cwd=self.directory, capture_output=True, text=True,
+            env=self.environment,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(["scripts/serve_packs.py"], result.stdout.splitlines())
 
 
 if __name__ == "__main__":

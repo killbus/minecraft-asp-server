@@ -404,6 +404,65 @@ class SharedTcpSceneTests(unittest.TestCase):
         )
         self.assertNotIn(PACKS_ACL, config)
 
+    def test_serve_packs_routes_to_the_backend_it_starts(self):
+        """The ACL and the window command come from one value, not two."""
+        config = self.config("--serve-packs")
+
+        self.assertEqual(self.config("--packs", "127.0.0.1:8000"), config)
+
+        output = self.run_scene("--dry-run", "--serve-packs").stdout
+        self.assertIn("-n packs", output)
+        self.assertIn("--bind '127.0.0.1'", output)
+        self.assertIn("--port 8000", output)
+        self.assertIn("--prefix /packs/", output)
+        # The pack server is part of the entry, so it starts before the Java
+        # server, the same way the sidecars and the mux do.
+        self.assertLess(output.index("-n packs"), output.index("bash scripts/start.sh"))
+
+    def test_serve_packs_takes_the_port_from_the_command_line(self):
+        config = self.config("--serve-packs", "--packs-port", "9100")
+
+        self.assertIn("    server packs 127.0.0.1:9100", config)
+        self.assertNotIn(PACKS_BACKEND, config)
+        output = self.run_scene("--dry-run", "--serve-packs", "--packs-port", "9100").stdout
+        self.assertIn("--port 9100", output)
+
+    def test_serve_packs_and_packs_are_mutually_exclusive(self):
+        for arguments in (
+            ("--serve-packs", "--packs", "127.0.0.1:8000"),
+            ("--packs", "127.0.0.1:8000", "--serve-packs"),
+        ):
+            with self.subTest(arguments=arguments):
+                errors = self.assert_rejected("--dry-run", *arguments)
+                self.assertIn("mutually exclusive", errors)
+
+    def test_packs_port_without_serve_packs_is_refused(self):
+        errors = self.assert_rejected(
+            "--dry-run", "--packs", "127.0.0.1:8000", "--packs-port", "9000",
+        )
+
+        self.assertIn("--packs-port needs --serve-packs", errors)
+
+    def test_serve_packs_refuses_a_bad_port(self):
+        errors = self.assert_rejected("--dry-run", "--serve-packs", "--packs-port", "eighty")
+
+        self.assertIn("--packs-port must be a whole number", errors)
+
+    def test_serve_packs_refuses_the_mux_listen_port(self):
+        errors = self.assert_rejected("--dry-run", "--serve-packs", "--packs-port", "25566")
+
+        self.assertIn("must differ from", errors)
+
+    def test_serve_packs_refuses_a_hand_written_haproxy_config(self):
+        haproxy_config = self.directory / "haproxy.cfg"
+        haproxy_config.write_text("# test config\n", encoding="utf-8")
+
+        errors = self.assert_rejected(
+            "--dry-run", "--serve-packs", "--haproxy-config", haproxy_config.as_posix(),
+        )
+
+        self.assertIn("cannot be combined with --haproxy-config", errors)
+
     def test_tls_config_is_unchanged_without_packs(self):
         certificate = self.pem("certs/site.pem")
         resolved = self.posix_path(certificate)
@@ -678,6 +737,85 @@ class SharedTcpSceneTests(unittest.TestCase):
 
         self.assertEqual(0, down.returncode, down.stdout + down.stderr)
         self.assertFalse(inventory.exists())
+
+    def test_up_owns_the_pack_server_and_down_stops_it(self):
+        stubs = self.directory / "stubs"
+        stubs.mkdir()
+        self.executable(
+            stubs, "tmux",
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "  has-session) exit 1 ;;\n"
+            "  new-window) printf '%s\\n' '@1' ;;\n"
+            "  list-panes) printf '0\\n' ;;\n"
+            "  respawn-window)\n"
+            "    case \"$*\" in\n"
+            "      *serve-packs.sh*) : > packs-up ;;\n"
+            "      *) : > mux-up ;;\n"
+            "    esac\n"
+            "    ;;\n"
+            "  *) exit 0 ;;\n"
+            "esac\n",
+        )
+        # Both ports answer once their window exists, and neither does before.
+        self.executable(
+            stubs, "ss",
+            "#!/bin/sh\n"
+            "[ -f mux-up ] || exit 0\n"
+            "printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:25566 0.0.0.0:*'\n"
+            "[ -f packs-up ] || exit 0\n"
+            "printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*'\n",
+        )
+        self.executable(stubs, "sleep", "#!/bin/sh\nexit 0\n")
+        self.executable(stubs, "haproxy", "#!/bin/sh\nexit 0\n")
+        scenes = self.directory / "a" / "b" / "scenes"
+        scenes.mkdir(parents=True)
+        (self.directory / "a" / "packs").mkdir()
+        script = scenes / "frpc-shared-tcp.sh"
+        shutil.copy2(SCENE, script)
+        frpc = scenes / "frpc.sh"
+        frpc.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        frpc.chmod(0o755)
+        environment = dict(os.environ)
+        environment.update({
+            "PATH": os.pathsep.join([stubs.as_posix(), environment["PATH"]]),
+            "HAPROXY": (stubs / "haproxy").as_posix(),
+            "MUX_PACKS_DIR": "packs",
+            "MUX_PACKS_STATE": "state",
+            "MUX_READY_TIMEOUT": "3",
+        })
+        state = self.directory / "state"
+
+        up = subprocess.run(
+            [
+                SH, script.as_posix(), "up", "--config", self.configs.as_posix(),
+                "--serve-packs", "--no-attach",
+            ],
+            cwd=self.directory, capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, up.returncode, up.stdout + up.stderr)
+        self.assertEqual(
+            "owned 127.0.0.1:8000 /packs/",
+            state.read_text(encoding="utf-8").strip(),
+        )
+
+        status = subprocess.run(
+            [SH, script.as_posix(), "status"], cwd=self.directory,
+            capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, status.returncode, status.stdout + status.stderr)
+        self.assertIn("packs: owned 127.0.0.1:8000 under /packs/", status.stdout)
+        self.assertIn("window packs up", status.stdout)
+
+        down = subprocess.run(
+            [SH, script.as_posix(), "down"], cwd=self.directory,
+            capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, down.returncode, down.stdout + down.stderr)
+        self.assertFalse(state.exists())
 
     def test_plain_config_is_unchanged(self):
         self.assertEqual(

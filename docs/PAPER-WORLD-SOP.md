@@ -235,13 +235,23 @@ scripts\serve-packs.cmd          # http://<host>:8000/packs/pack-a.zip
 ```
 
 ```sh
-scripts/serve-packs.sh           # PACK_PORT=8000 by default
+scripts/serve-packs.sh           # binds 0.0.0.0:8000, serves /packs/
 ```
 
 `PackManagerPro` sends the URL to the client, so `127.0.0.1` only reaches a
-client running on this machine. Remote Java clients need the public entry:
-keep the pack server running (above), enable the plaintext route on the shared
-mux with `--packs 127.0.0.1:8000` (ASP-SOP 10.1.3), then use the public
+client running on this machine. Remote Java clients need the public entry.
+The production entry therefore declares the route and the process that serves
+it in one place, by adding `--serve-packs` to the `up` line (ASP-SOP 10.1.3):
+
+```sh
+scripts/scenes/frpc-shared-tcp.sh up ... --serve-packs --packs-port 8000
+```
+
+That starts `scripts/serve-packs.sh` in a `packs` window bound to
+`127.0.0.1:8000`, adds the matching ACL and backend to the mux, and gives
+`status` both facts to report. The standalone command above is for a manual
+one-off, when the pack server is somebody else's process and the mux only
+gets `--packs 127.0.0.1:8000`. Either way, point PackManagerPro at the public
 address:
 
 ```yaml

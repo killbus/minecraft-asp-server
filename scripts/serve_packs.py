@@ -14,7 +14,6 @@ content and is excluded from the server snapshots.
 from __future__ import annotations
 
 import argparse
-import os
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -46,11 +45,9 @@ class PrefixedHandler(SimpleHTTPRequestHandler):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bind", default="0.0.0.0")
-    parser.add_argument(
-        "--port", type=int, default=int(os.environ.get("PACK_PORT", "8000")),
-    )
+    parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--directory", default="server/packs")
-    parser.add_argument("--prefix", default=os.environ.get("MUX_PACKS_PREFIX", "/packs/"))
+    parser.add_argument("--prefix", default="/packs/")
     arguments = parser.parse_args()
     if not (arguments.prefix.startswith("/") and arguments.prefix.endswith("/")):
         parser.error("--prefix must start and end with '/'")
