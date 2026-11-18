@@ -39,9 +39,10 @@ SCOPES = frozenset(
         "repo",
         "ci",
         "backup",
+        "config",
     }
 )
-RUNTIME_SCOPES = frozenset({"server", "runtime", "plugins"})
+RUNTIME_SCOPES = frozenset({"server", "runtime", "plugins", "config"})
 CONTENT_SCOPE = "world"
 
 SUBJECT = re.compile(

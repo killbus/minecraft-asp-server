@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/11-18-config-bundle/prd.md", "reason": "acceptance criteria R1-R7"}
+{"file": ".trellis/tasks/11-18-config-bundle/design.md", "reason": "failure semantics and the boundary rule to re-derive against"}
+{"file": ".trellis/spec/backend/world-artifacts.md", "reason": "existing hash/path verification contract this must not contradict"}
+{"file": "scripts/verify_runtime.py", "reason": "safe_path and fingerprint behaviour the new tool reuses"}
+{"file": "tests/test_verify_runtime.py", "reason": "test conventions for a script-level tool"}
+{"file": "docs/PAPER-WORLD-SOP.md", "reason": "section 7 and 7a must state the class boundary and the apply command"}
+{"file": "docs/ASP-SOP.md", "reason": "deploy flow and the false .rollback claims that must be removed"}

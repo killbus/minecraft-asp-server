@@ -22,6 +22,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [frpc Scenes](./frpc-scenes.md) | Declarative optional frpc process composition | Active |
 | [World Artifacts](./world-artifacts.md) | Immutable Anvil artifacts, rebuild/verify contracts, exit codes | Active |
 | [Runtime Inventory](./runtime-inventory.md) | `runtime.lock.json`, read-only verification, installer contract | Active |
+| [Configuration Bundle](./config-bundle.md) | Tracking `server/` config as source, rendering secrets, apply contract | Active |
 
 ---
 
