@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "notes": "Declarative server configuration. Every entry is class source; applying a file renders its ${NAME} placeholders from --set or the environment. A default is allowed only where the value is a plugin-generated identity that carries no behaviour and is safe to share, never for a credential.",
+  "files": [
+    {
+      "path": "bukkit.yml",
+      "class": "source",
+      "sha256": "a72396bbd1b69636b63f990995ed1ce31df7183af275868b4d638071fd4c866a",
+      "placeholders": []
+    },
+    {
+      "path": "commands.yml",
+      "class": "source",
+      "sha256": "44afdf9b41eea9f2d8b9ae41d3c07443ec78a4962c6b7ae33fb3097d6c94e3b9",
+      "placeholders": []
+    },
+    {
+      "path": "config/paper-global.yml",
+      "class": "source",
+      "sha256": "2cf90216ce7c220b1eed41e4ab8b9482b2ea51e6f0ed8b2b86f97881e72297da",
+      "placeholders": []
+    },
+    {
+      "path": "config/paper-world-defaults.yml",
+      "class": "source",
+      "sha256": "9d69eab86b77e9330703ae2f5b4dade068adf8d725ef72d7186acff16b874041",
+      "placeholders": []
+    },
+    {
+      "path": "permissions.yml",
+      "class": "source",
+      "sha256": "2775970aaa23bebd0fee95149417c63c32a512a1475c0bf339474d2cc442fc74",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/bStats/config.yml",
+      "class": "source",
+      "sha256": "95c45177150f97ff686273f9fc029bfd2127fc89adfa417b56f085fe25d87d43",
+      "placeholders": [
+        {
+          "name": "BSTATS_SERVER_UUID",
+          "default": "a7dbc326-6447-49fb-8e2b-6277de7edebe"
+        }
+      ]
+    },
+    {
+      "path": "plugins/CoreProtect/config.yml",
+      "class": "source",
+      "sha256": "8a1a59ca1f1dec45f0f23c96030536ddff3bfcebdcf2358072a7ed28fd9633dc",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/CoreProtect/language.yml",
+      "class": "source",
+      "sha256": "346632931844d94588ec5c3c8945477513ce6d54e331d813aaf48a548a34f802",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/floodgate/config.yml",
+      "class": "source",
+      "sha256": "ff9de61fd5a6c85872c20071ef772f449f24860428cd31468da22347c4950b9c",
+      "placeholders": [
+        {
+          "name": "FLOODGATE_METRICS_UUID",
+          "default": "e525b9ff-24f7-4c39-9d53-ff2a34dd8901"
+        }
+      ]
+    },
+    {
+      "path": "plugins/Geyser-Spigot/config.yml",
+      "class": "source",
+      "sha256": "e0b2bcbc2cd0e15526d819ce063188065c0fc8f9f8ebc212db7b35f8c84e938a",
+      "placeholders": [
+        {
+          "name": "GEYSER_ADVERTISE_ADDRESS",
+          "default": null
+        }
+      ]
+    },
+    {
+      "path": "plugins/GrimAC/config.yml",
+      "class": "source",
+      "sha256": "d3246d9e9b5fc44210cb7d46746a71e5187d3a01a390d728fe842869c0971f36",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/database.yml",
+      "class": "source",
+      "sha256": "d54ec1f4c22b91fcc1fd7e5a5117ea2cf9aa0d0a1ccafcf6cdd14babcfbd6207",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/databases/mongo.yml",
+      "class": "source",
+      "sha256": "71047e213f1c161545330972c2697cd24e83a43d59fda9e7a77ee16dfb21e995",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/databases/mysql.yml",
+      "class": "source",
+      "sha256": "24b887dd836a5350ce4eb1c2da5242cde5fd7c4bc367dce990a16e7d8611f323",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/databases/postgres.yml",
+      "class": "source",
+      "sha256": "37eaac920cfda659803f102e4ff773a53471d69f7d67b9710c67d180b595baa2",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/databases/redis.yml",
+      "class": "source",
+      "sha256": "b9b9ce601e014e87fed9114872f32995a351479c0165ff07804b68edea9bfa7b",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/databases/sqlite.yml",
+      "class": "source",
+      "sha256": "86fbaded96930899c40e0d3ca83f1cbcd4cb4fd71c7e0a462e107f91e12552e2",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/discord.yml",
+      "class": "source",
+      "sha256": "d8487bbb93b9db47e8137d2fa752238fd2869f9ce4a2d6bb7f53c14af9bb930b",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/messages.yml",
+      "class": "source",
+      "sha256": "9973cd396971c93d7061ce796614cd3099fc7cd568f5ba4c32261a6c65c4f828",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/GrimAC/punishments.yml",
+      "class": "source",
+      "sha256": "64aeeab2d493508630e158af283453df58d43247478c9e2d6ceb30eeddd33bad",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/Multiverse-Core/config.yml",
+      "class": "source",
+      "sha256": "79cfa4ab70e1ee0aa7318a3aa9f230f8bc26583fa4da46997d00a29b8741b812",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/PackManagerPro/config.yml",
+      "class": "source",
+      "sha256": "d08162835b2059e1701fbb21e1a05f6ba11b4980723c63d8a754dd2ced502983",
+      "placeholders": [
+        {
+          "name": "PACK_URL",
+          "default": null
+        }
+      ]
+    },
+    {
+      "path": "plugins/SkinsRestorer/config.yml",
+      "class": "source",
+      "sha256": "c3173621ab41b020e639ad4a5be2d9680a31ded99e984e141c7fbb7aeef7f725",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/spark/config.json",
+      "class": "source",
+      "sha256": "992ba9f3a4a7ce3de112eb95575328956fdc3ce6781c455ebce7b23db7e7da42",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/ViaBackwards/config.yml",
+      "class": "source",
+      "sha256": "be5d82bfa2c3c67b03a794f7318d2dd28f4c22522c8425ab8e4ea30e8206ba28",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/ViaVersion/config.yml",
+      "class": "source",
+      "sha256": "f63deaf0b3fd7ad86ff7759f1cac400035e21c6d235ea391a79b94688fe9f0f5",
+      "placeholders": []
+    },
+    {
+      "path": "server.properties",
+      "class": "source",
+      "sha256": "d5a1410650a6f2c36dfba4f68f22c08bac36c915a6031ba193dbc2e8dab1a7ae",
+      "placeholders": [
+        {
+          "name": "MANAGEMENT_SERVER_SECRET",
+          "default": null
+        }
+      ]
+    },
+    {
+      "path": "spigot.yml",
+      "class": "source",
+      "sha256": "aeb07a43690f91bcdd37b068494c5f32c3a2c5736f58664ce0235d4bdce01a78",
+      "placeholders": []
+    }
+  ]
+}

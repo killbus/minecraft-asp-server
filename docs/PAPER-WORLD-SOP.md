@@ -340,12 +340,23 @@ one-time stall for a small resident-chunk cost (~50-120 MB measured here).
 
 Paper 26.x keeps all registered dimensions under `server/world/dimensions/`.
 Backing up the whole `server/world/` tree therefore covers the hub, nether,
-end, and `trials` together. The backup scripts also include:
+end, and `trials` together. The backup scripts copy, in one snapshot:
 
-- `plugins/Multiverse-Core/worlds.yml`
-- `plugins/PackManagerPro/config.yml`
-- `permissions.yml`
-- `server.properties` and `config/`
+- `server/world/` in full, minus `session.lock` and `level.dat_old`
+- every `server/plugins/<name>/` directory, jars excluded
+- `plugins/*.yml`, `server.properties`, `eula.txt`, `bukkit.yml`,
+  `spigot.yml`, `commands.yml`, `permissions.yml`, `server-icon.png`,
+  `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json`
+- `server/config/`
+
+That set is wider than the `source` class in section 7b on purpose. A
+snapshot answers "what did this host look like at that instant", so it
+carries instance state too: `worlds.yml`, `key.pem`, `database.db`,
+`playerdata`, `nethernet/`. A deploy answers "what should this host look
+like", and those files are exactly the ones it must not carry. Copying
+`plugins/<name>/` out of a snapshot into another host is the failure that
+`apply_config.py` exists to remove; restoring a snapshot onto the host it
+came from is fine.
 
 Geyser and SkinsRestorer `cache/` directories are regenerable and excluded;
 do not widen that exclusion to other plugins without checking their state.
@@ -397,16 +408,68 @@ Change `join-destination` to `trials` to make the adventure map the login
 world instead. Either value is preferable to leaving it empty while an
 on-demand world is registered.
 
-The previous ASP engine and its Slime worlds were moved, not deleted, to:
+There is no ASP rollback copy. The ASP engine and its Slime worlds are not
+on the deployment host, and `server/.rollback/` is not part of this
+repository: `server/` is gitignored, so a rollback directory there is never
+cloned, never deployed, and never restored. Do not plan a rollback around
+that path. Going back to ASP would mean provisioning the engine again
+deliberately, not recovering a copy.
+
+## 7b. Configuration as source
+
+`server/` is gitignored as one blob, so declaring a host used to mean copying
+`plugins/*/` by hand - which ships `worlds.yml`, `key.pem`, databases and caches
+alongside the files that actually describe the server. The declarative part
+now lives in this repository instead:
+
+| Class | Meaning | Where |
+| --- | --- | --- |
+| source | a human edits it to define behaviour, identical on every host | `config/` + `config.lock.json` |
+| secret | a value inside a source file that the operator supplies | `${NAME}`, rendered on apply |
+| instance | produced by play or by the host; never committed, never applied | stays in `server/` |
+
+Source: `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`,
+`permissions.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`,
+and each plugin's declarative YAML/JSON.
+
+Instance: `world/`, `plugins/*/worlds.yml` and `anchors.yml`, `*.db`,
+`playerdata` and `players/`, `skins/`, caches, `logs/`, `nethernet/`,
+`key.pem`, `ops.json`, `whitelist.json`, `banned-*.json`, `usercache.json`,
+`eula.txt`, and `packs/`.
+
+Apply on a stopped host:
 
 ```text
-server/.rollback/asp-<timestamp>/
+git pull
+python -B scripts/apply_config.py --dry-run \
+  --set PACK_URL=http://<public>:<port>/packs/pack-a.zip \
+  --set GEYSER_ADVERTISE_ADDRESS=<public>:34003 \
+  --set MANAGEMENT_SERVER_SECRET=<secret>
+python -B scripts/apply_config.py \
+  --set PACK_URL=http://<public>:<port>/packs/pack-a.zip \
+  --set GEYSER_ADVERTISE_ADDRESS=<public>:34003 \
+  --set MANAGEMENT_SERVER_SECRET=<secret>
+python -B scripts/verify_runtime.py
+scripts/start.sh
 ```
 
-To roll back, stop Paper, restore the ASP server JAR, ASP plugin,
-`plugins/SlimeWorldManager/`, `slime_worlds/`, and the ASP config from that
-directory, then start the old JAR. Keep a stopped-server snapshot before any
-rollback trial.
+`--set` wins over the environment, so the same value can be exported instead.
+The tool verifies each template's SHA-256 against `config.lock.json` before
+writing, refuses any path classed instance, refuses a placeholder the
+manifest does not declare, and refuses a value that still contains `${`.
+It writes through a `.tmp.<pid>` sibling and `os.replace`, so an interrupted
+run leaves the old file in place. `--check` exits 1 if the host differs and
+writes nothing; `--dry-run` prints `CREATE`/`UPDATE`/`UNCHANGED`.
+
+Three placeholders have no default and must be supplied on every host:
+`PACK_URL` is the address clients download the pack from,
+`GEYSER_ADVERTISE_ADDRESS` is the `host:port` NetherNet advertises to Bedrock
+clients, and `MANAGEMENT_SERVER_SECRET` is Paper's management credential.
+The other two (`FLOODGATE_METRICS_UUID`, `BSTATS_SERVER_UUID`) are
+plugin-generated identities whose only job is telemetry; each carries a
+default in the lock so a fresh host renders without inventing one, and an
+existing host is not churned. A default is allowed there and nowhere else -
+never for anything that grants access.
 
 ## 8. Known boundaries
 

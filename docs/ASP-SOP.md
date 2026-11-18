@@ -1,9 +1,11 @@
 # AdvancedSlimePaper (ASP) Operations SOP
 
-> **Legacy / rollback only.** The active runtime is now standard Paper 26.2
-> with Multiverse-Core. Use [PAPER-WORLD-SOP.md](./PAPER-WORLD-SOP.md) for
-> normal operations. Keep this document only for restoring the archived ASP
-> engine from `server/.rollback/asp-<timestamp>/`.
+> **Legacy / reference only.** The active runtime is standard Paper 26.2 with
+> Multiverse-Core. Use [PAPER-WORLD-SOP.md](./PAPER-WORLD-SOP.md) for normal
+> operations. There is no archived ASP engine to restore: no `.rollback` copy
+> exists on the host, and `server/` is gitignored so the repository never
+> carried one. This document describes the ASP layout and is not a rollback
+> path.
 
 How to take an ASP server from scratch to production-ready.
 Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-14.
@@ -25,7 +27,9 @@ Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-14.
 | Program (dropped in) | `plugins/asp-plugin-*.jar` | SWP (Slime World Plugin) - "the plugin" in the official docs; released together with the server jar |
 | Program (dropped in) | other `plugins/*.jar` | Geyser, Floodgate, ViaVersion, SkinsRestorer, ... |
 | Program (dropped in) | `world/datapacks/*.zip` | World datapacks, not plugins; included in the whole-world backup |
-| Config (kept, edited by hand) | `eula.txt`, `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`, `server-icon.png`, per-plugin yml (`worlds.yml`, ...) | `/reload` or restart after edits |
+| Config (source, in git) | `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, `permissions.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`, per-plugin declarative yml | Lives in `config/` and `config.lock.json`; apply with section 2a, not by hand |
+| Operator state (instance) | `eula.txt`, `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Never applied from the bundle |
+| Generated state (instance) | `plugins/*/worlds.yml`, `anchors.yml`, `key.pem`, `*.db`, caches, `nethernet/` | Never applied from the bundle |
 | Data (not regenerable - back these up) | `world/` (`level.dat`, `data/`, `dimensions/`, `players/`), `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Backup policy centers on these |
 | Sensitive instance state (back up, never commit) | `plugins/Geyser-Spigot/nethernet/` (`provider-state/`, `identity.pem`, `operator-link.txt`) | NetherNet/Warden identity; restoring it keeps the same `*.wdn.gg` name. Contains a private key - never commit, share or paste it |
 | Regenerable output (safe to delete) | `libraries/`, `versions/`, `cache/`, `logs/`, `.paper/`, `slime_worlds/`, `session.lock`, `level.dat_old`, `*.log` | Rebuilt/re-downloaded at startup; do not copy to a new machine |
@@ -83,6 +87,23 @@ state under that name, so each exclusion needs the same evidence.
    the save path; chunks are already saved right after spawn
    preparation, so a kill is low-risk but not the normal procedure.
 
+### 2a. Declarative configuration
+
+Do not hand-edit `server.properties`, `config/paper-*.yml` or a plugin's
+declarative yml on a deployed host. They are tracked in this repository:
+`config/` holds the templates and `config.lock.json` holds each SHA-256.
+
+```text
+python -B scripts/apply_config.py --check
+python -B scripts/apply_config.py --dry-run --set PACK_URL=...
+python -B scripts/apply_config.py --set PACK_URL=... --set GEYSER_ADVERTISE_ADDRESS=... --set MANAGEMENT_SERVER_SECRET=...
+```
+
+Run it only with the server stopped. `--check` exits 0 when the host already
+matches, 1 when it differs, and 2 when the bundle is unsafe (hash drift, an
+instance path, a missing value). See
+[PAPER-WORLD-SOP.md](./PAPER-WORLD-SOP.md) section 7b for the class rule.
+
 ## 3. Import an existing world
 
 1. Stop the server.
@@ -121,6 +142,11 @@ the next run and never count them against retention.
    Plugin jars are not in the backup. Reconcile them with the lock revision
    associated with this backup before starting; a newer plugin may not work
    with older restored data. See section 4.1.
+
+   Restoring the instance files is correct here because the backup came from
+   this host and describes this world set. Onto a *different* host the same
+   copy is a deploy, not a restore: use `scripts/apply_config.py` (section 2a)
+   and leave `worlds.yml`, `key.pem`, the databases and the player files alone.
 6. Start the server and confirm `Done (..s)!` with no `Failed to load
    world` and no `Exception`.
 7. Keep `world.broken-<date>/` until the restored world has been played on

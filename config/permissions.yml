@@ -1,0 +1,6 @@
+multiverse.core.list.worlds:
+  default: true
+multiverse.teleport.self.w.trials:
+  default: true
+multiverse.teleport.self.w.world:
+  default: true

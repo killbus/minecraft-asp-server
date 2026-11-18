@@ -1,0 +1,30 @@
+enable-pack: true
+application-type: per-world
+
+global-application:
+  pack-url: ''
+  force-pack: false
+  prompt-message: ''
+
+per-world-application:
+  world:
+    # The direct download link to the resource pack.
+    # If you want to set up your own direct download link to a resource pack, see PackManagerPro's webpage for a guide.
+    pack-url: ''
+    # Force players to download the resource pack? If they deny, they will be disconnected from the server.
+    force-pack: false
+    # Optional additional prompt message. (Sent alongside the default prompt).
+    prompt-message: ''
+  example_world:
+    pack-url: ''
+    force-pack: false
+    prompt-message: ''
+  trials:
+    pack-url: ${PACK_URL}
+    force-pack: false
+    prompt-message: MS Painted - trials
+
+messages:
+  prefix: <dark_gray>[<dark_green>PackManagerPro<dark_gray>] <reset>
+  reload: <gray>PackManagerPro has been reloaded.
+  no-permission: <red>You do not have permission!
