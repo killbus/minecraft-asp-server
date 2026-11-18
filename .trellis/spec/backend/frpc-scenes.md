@@ -44,6 +44,7 @@ Shared-TCP composition:
 scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> ...
 scripts/scenes/frpc-shared-tcp.sh up --scene <file> ...
 scripts/scenes/frpc-shared-tcp.sh up --scene <file> --proxy-protocol
+scripts/scenes/frpc-shared-tcp.sh up --scene <file> --packs 127.0.0.1:8000
 ```
 
 `--config` and `--scene` are mutually exclusive in both scripts.
@@ -100,6 +101,31 @@ The scene must still make the input's validity observable:
 
 Replacing a PEM requires the existing `reload` verb to make HAProxy read it.
 The scene does not watch files or reload on its own.
+
+#### Resource-pack route (opt-in, plaintext)
+
+`--packs HOST:PORT` adds a destination for plaintext resource-pack downloads
+on the shared port. The contract:
+
+- the route is one ACL on `mc_shared`,
+  `acl is_packs payload(0,N) -m beg "GET <prefix>"`, plus
+  `use_backend packs if is_packs` **before** the Geyser rule, because the same
+  request also matches `is_http`;
+- the backend is `mode tcp`, like every other backend in this file; HAProxy
+  reads the bytes for the ACL and forwards the connection unchanged;
+- no `--tls-cert`, no `mode http`, no new frontend, and no change to
+  `geyser_tls`/`geyser_tls_termination` are involved;
+- `MUX_PACKS_PREFIX` (default `/packs/`) must be one literal path segment:
+  leading and trailing `/`, only `A-Za-z0-9._~/-`, no `//`, no `..`, and not
+  `/` alone;
+- with the option absent, the generated file is byte-identical to the
+  pre-option output, including ACL order;
+- the match is offset 0 of a fresh connection. Keep-alive reuse, h2c, and a
+  request that has sent fewer than `N` bytes when the 4-byte `is_http` accept
+  fires fall through to Geyser. That limitation is documented, not fixed by
+  restructuring the accept line;
+- the backend sees the forwarded path unchanged, so the pack server must serve
+  `server/packs/` under the same prefix (`scripts/serve_packs.py`).
 
 ### 3. Contracts
 
@@ -223,6 +249,11 @@ all frpc sidecars -> HAProxy binds -> server starts
 | duplicate scene path option | exit 2 |
 | invalid `MUX_LAN_JAVA` in generated PROXY mode | exit 2 |
 | `MUX_LAN_JAVA` collides with another bind | exit 2 |
+| `--packs` endpoint is not `HOST:PORT` | exit 2 |
+| `--packs` port collides with any mux bind | exit 2 |
+| `MUX_PACKS_PREFIX` is not a literal `/segment/` path | exit 2 |
+| `--packs` with a hand-written `--haproxy-config` | exit 2 |
+| nothing listens on the `--packs` backend | warning; start continues |
 | non-numeric `MUX_CERT_WARN_DAYS` | exit 2 |
 | missing/unreadable scene file | exit 2 |
 | missing `session` or `server` | exit 2 |

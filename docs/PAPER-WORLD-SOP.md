@@ -212,7 +212,7 @@ per-world-application:
     force-pack: false
     prompt-message: ''
   trials:
-    pack-url: http://127.0.0.1:8000/pack-a.zip
+    pack-url: http://127.0.0.1:8000/packs/pack-a.zip
     force-pack: false
     prompt-message: MS Painted - trials
 ```
@@ -221,10 +221,13 @@ PackManagerPro sends the pack on join and on `PlayerChangedWorldEvent`. A world
 with an empty `pack-url` clears the previous pack. Restart the server or run
 `pmp reload` after editing the file.
 
-The pack file lives in `server/packs/` and is served by a plain HTTP server:
+The pack file lives in `server/packs/` and is served by
+`scripts/serve_packs.py`, which maps that directory to the URL prefix
+`/packs/` (the mux forwards the path unchanged, so the prefix cannot be
+left to the static root):
 
 ```powershell
-scripts\serve-packs.cmd          # python -m http.server 8000 --directory server\packs
+scripts\serve-packs.cmd          # http://<host>:8000/packs/pack-a.zip
 ```
 
 ```sh
@@ -232,9 +235,21 @@ scripts/serve-packs.sh           # PACK_PORT=8000 by default
 ```
 
 `PackManagerPro` sends the URL to the client, so `127.0.0.1` only reaches a
-client running on this machine. For remote Java clients, point `pack-url` at an
-address they can reach, or keep the pack behind the same proxy/Geyser path the
-players already use. Verify with the HTTP access log after `/mvtp trials`.
+client running on this machine. Remote Java clients need the public entry:
+keep the pack server running (above), enable the plaintext route on the shared
+mux with `--packs 127.0.0.1:8000` (ASP-SOP 10.1.3), then use the public
+address:
+
+```yaml
+per-world-application:
+  trials:
+    pack-url: http://<public-ip>:<port>/packs/pack-a.zip
+```
+
+Use the same host and port Java players use, and plain `http://`: the route
+matches a `GET /packs/` at offset 0, so it needs no certificate or host name,
+while an https URL becomes a ClientHello and goes to Geyser. Verify with the
+HTTP access log after `/mvtp trials`.
 
 `server/packs/` is externally sourced and regenerable, so it is deliberately
 **not** part of the server snapshots. Record the variant instead:

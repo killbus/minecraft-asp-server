@@ -840,11 +840,15 @@ its own.
 | `127.0.0.1:19132` | Geyser NetherNet TCP signalling |
 | `127.0.0.1:25567` (TLS, default) | TLS termination for the ClientHello, only with `--tls-cert` |
 | `0.0.0.0:25564` (LAN, default with PROXY) | plain Java entry that injects PROXY v2 when `--proxy-protocol` is used |
+| `127.0.0.1:8000` (opt-in) | resource-pack HTTP server, reached only through `--packs` (10.1.3) |
 
 Classification: a TLS ClientHello (`req.ssl_hello_type 1`) or an HTTP
 method / HTTP/2 preface goes to Geyser; a Java legacy ping (`0xFE`) or a
 handshake packet (`0x00` at offset 1) goes to Java; anything still
 unclassified after `inspect-delay 3s` falls through to Java.
+
+With `--packs`, a plaintext `GET <prefix>` is decided before that: it is an
+HTTP method too, so the packs rule has to come first (10.1.3).
 
 Without `--tls-cert` the mux is a transparent byte pipe: the ClientHello
 is forwarded untouched, so a certificate has to live in Geyser
@@ -1313,6 +1317,65 @@ server, no Geyser and no scene, and nothing starts it for you - it is an
 operator diagnostic. It cannot say whether Geyser accepts the header or which
 ICE path a real client picked; those still need a Bedrock client and the
 Geyser log lines above.
+
+#### 10.1.3 Resource packs on the shared port (opt-in, plaintext)
+
+`--packs HOST:PORT` adds one more destination to the shared port: a
+connection whose first bytes are `GET <prefix>` is handed to that local HTTP
+server instead of Geyser, so clients fetch
+`http://<public-ip>:<port>/packs/<file>` from the entry they already know.
+The branch is plaintext from the client's first byte, which is why it needs
+no certificate, no bound name and no TLS work: the request already has the
+form the mux can read. The ACL sits ahead of the Geyser line because the
+same `GET` also matches `is_http`.
+
+The match is exactly `payload(0,<len>) -m beg "GET <prefix>"`, where
+`<len>` is the length of `GET ` plus the prefix: offset 0 of a fresh
+connection, which is where a resource-pack download starts. A second
+request on a kept-alive connection, an h2c preface, or an upgraded stream
+does not start there and falls through to Geyser, which answers its usual
+404/426. PackManagerPro opens a new connection per download, so that is not
+on the supported path.
+
+`MUX_PACKS_PREFIX` sets the prefix, `/packs/` by default. It has to be one
+literal path segment - leading and trailing `/`, only `A-Za-z0-9._~/-`, no
+`//` and no `..` - and `/` is refused because it would swallow every
+plaintext request. The backend stays in `mode tcp` like the rest of the
+mux: HAProxy reads the bytes for the ACL and forwards the connection
+unchanged. When the prefix is not the default, export the same
+`MUX_PACKS_PREFIX` for the pack server as well; the two have to agree.
+
+Start the pack server on that endpoint (`scripts/serve-packs.cmd` or
+`scripts/serve-packs.sh`). It serves `server/packs/` under the same prefix,
+because the mux forwards the request path unchanged; without that mapping
+the backend would look for `server/packs/packs/<file>`. Then point
+PackManagerPro at the public address:
+
+```yaml
+pack-url: http://<public-ip>:<port>/packs/pack-a.zip
+```
+
+The pack travels in clear text; Minecraft verifies it against the SHA-1 in
+the pack metadata, so a modified file is rejected by the client. A client
+made to speak HTTPS sends a ClientHello instead, takes the existing TLS
+branch, and never reaches this ACL.
+
+The scene refuses `--packs` with a malformed endpoint, a port already used
+by `--listen`, `--java`, `--bedrock`, `--tls-listen` or `MUX_LAN_JAVA`, a
+malformed prefix, or a hand-written `--haproxy-config` (that file owns the
+whole configuration). At start it warns, without failing, when nothing
+listens on the packs endpoint yet. While the backend is down, only
+`<prefix>*` answers 503; Java and Bedrock are unaffected.
+
+`reload` only re-reads the file already on disk; it does not regenerate it.
+So rollback is `down` and then `up` without `--packs`: `up` is what rewrites
+the generated file, and it refuses while the mux is live. The other route is
+to edit `.tmp/frpc-shared-tcp/haproxy.cfg` by hand and `reload` - the next
+`up` overwrites that edit.
+
+The matcher reads a request line in HTTP/1.1 origin form. A JVM configured
+with an HTTP proxy sends an absolute-form line (`GET http://...`) and falls
+through to Geyser, as do keep-alive reuse, h2c, and HTTPS.
 
 ### 10.2 Keeping the certificate for the shared port current (Linux only)
 

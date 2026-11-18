@@ -10,3 +10,7 @@ artifacts/
 
 # local backup output (scripts/backup.cmd, scripts/backup.sh)
 backups/
+
+# Python bytecode (tests import scripts/ as a namespace package)
+__pycache__/
+*.pyc
