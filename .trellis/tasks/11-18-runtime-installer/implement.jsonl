@@ -1,0 +1,2 @@
+{"file": "docs/ASP-SOP.md", "reason": "runtime inventory, install/upgrade and verify exit codes"}
+{"file": ".trellis/spec/backend/world-artifacts.md", "reason": "hash/path verification contract"}
