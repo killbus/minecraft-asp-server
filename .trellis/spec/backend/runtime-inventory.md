@@ -34,6 +34,9 @@ the declaration, never the binaries.
 - `download_url`, when present, is a build-specific artifact for the locked
   version. `latest` and `lastStableBuild` are forbidden: they cannot reproduce
   a hash.
+- HTTP requests carry a descriptive User-Agent with the repository URL.
+  PaperMC answers 403 to a generic or contact-less agent, and that failure
+  looks like a broken URL otherwise.
 - A present file that differs is `DRIFT` and is not replaced without
   `--replace`. A URL that serves different bytes is a failure, never a reason
   to rewrite the lock.

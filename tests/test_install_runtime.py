@@ -20,9 +20,11 @@ PAYLOAD = b"runtime-bytes"
 class FixtureHandler(http.server.BaseHTTPRequestHandler):
     files = {}
     requests = []
+    user_agents = []
 
     def do_GET(self):
         type(self).requests.append(self.path)
+        type(self).user_agents.append(self.headers.get("User-Agent"))
         body = type(self).files.get(self.path)
         if body is None:
             self.send_error(404)
@@ -40,6 +42,7 @@ class InstallRuntimeTests(unittest.TestCase):
     def setUp(self):
         FixtureHandler.files = {}
         FixtureHandler.requests = []
+        FixtureHandler.user_agents = []
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FixtureHandler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -100,6 +103,10 @@ class InstallRuntimeTests(unittest.TestCase):
         self.assertEqual(0, code, output)
         self.assertEqual(PAYLOAD, (self.server_dir / "paper-server.jar").read_bytes())
         self.assertEqual(["/paper.jar"], FixtureHandler.requests)
+        self.assertEqual([install_runtime.USER_AGENT], FixtureHandler.user_agents)
+        self.assertIn(
+            "github.com/killbus/minecraft-asp-server", install_runtime.USER_AGENT,
+        )
 
     def test_a_matching_file_is_skipped_without_a_request(self):
         (self.server_dir / "paper-server.jar").write_bytes(PAYLOAD)

@@ -25,6 +25,9 @@ except ImportError:  # Running as `python scripts/install_runtime.py`.
 
 REPOSITORY = Path(__file__).resolve().parent.parent
 CHUNK = 1024 * 1024
+# PaperMC rejects a User-Agent without a contact URL (its downloads service
+# documents this); every other vendor accepts the same shape.
+USER_AGENT = "minecraft-asp-server/1 (https://github.com/killbus/minecraft-asp-server)"
 
 
 def _destination(server_dir, artifact):
@@ -38,7 +41,7 @@ def _download(url, destination, expected):
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
         request = urllib.request.Request(
-            url, headers={"User-Agent": "asp-runtime-installer/1"},
+            url, headers={"User-Agent": USER_AGENT},
         )
         with urllib.request.urlopen(request, timeout=60) as response:
             status = getattr(response, "status", 200)
