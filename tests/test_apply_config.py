@@ -8,9 +8,10 @@ import json
 import os
 from pathlib import Path
 import sys
-import tempfile
 import unittest
 from unittest.mock import patch
+
+from tests import scratch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -26,9 +27,7 @@ def digest(payload):
 
 class ApplyConfigTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = self.enterContext(scratch.directory("apply-config-"))
         self.config = self.directory / "config"
         self.config.mkdir()
         self.server = self.directory / "server"
@@ -551,7 +550,7 @@ class RepositoryConfigTests(unittest.TestCase):
         # The coordinates live only in the gitignored server tree; the
         # credential comes from the environment. This is the documented deploy
         # shape, so the settings path is exercised for real.
-        with tempfile.TemporaryDirectory() as temporary:
+        with scratch.directory("repository-") as temporary:
             settings = Path(temporary) / "minecraft-server.json"
             settings.write_text(
                 json.dumps(
