@@ -8,6 +8,7 @@
 #  Scope (see docs/PAPER-WORLD-SOP.md - not regenerable):
 #    world/ + whitelist/ban/usercache/ops json + server config
 #    + config/ (Paper) + per-plugin config dirs (jars excluded)
+#    + settings/*.json (per-host coordinates; *.example.json excluded)
 #    Known-regenerable plugin caches are excluded (see below).
 #  Output: <target>/<UTC timestamp>/ with MANIFEST.txt
 #
@@ -26,6 +27,7 @@
 #    BACKUP_MIN_INTERVAL   skip when every target already has a complete
 #                          backup younger than this many minutes
 #                          (default 0 = never skip)
+#    SETTINGS_DIR          per-host settings source (default ../settings)
 #    BACKUP_REQUIRE_ALL=1  a failed mirror fails the run (default 0)
 #    ALLOW_ONLINE=1        proceed even though the server is running
 # ============================================================
@@ -61,6 +63,7 @@ KEEP="${KEEP:-5}"
 if [ $# -ge 1 ]; then SERVER_DIR="$1"; else SERVER_DIR="$SCRIPT_DIR/../server"; fi
 MIN_INTERVAL="${BACKUP_MIN_INTERVAL:-0}"
 REQUIRE_ALL="${BACKUP_REQUIRE_ALL:-0}"
+SETTINGS_DIR="${SETTINGS_DIR:-$SCRIPT_DIR/../settings}"
 TS="$(date -u +%Y%m%d-%H%M%S)"
 CURRENT_DEST=""
 
@@ -234,6 +237,22 @@ do_target() {
         fi
     done
     cp "$SERVER_DIR"/plugins/*.yml "$dest/plugins/" 2>/dev/null || true
+
+    # --- per-host settings: untracked, so the snapshot is their only copy ---
+    # git tracks settings/*.example.json only. The file that fills the
+    # placeholders is host state, not source: it cannot be reconstructed from
+    # the repository, and it is what explains the rendered server.properties
+    # and plugin yml beside it. See docs/PAPER-WORLD-SOP.md section 7b.
+    if [ -d "$SETTINGS_DIR" ]; then
+        mkdir -p "$dest/settings" || return 1
+        tar cf - --exclude='*.example.json' -C "$SETTINGS_DIR" . | tar xf - -C "$dest/settings"
+        src_count=$(find "$SETTINGS_DIR" -type f ! -name '*.example.json' | wc -l)
+        dst_count=$(find "$dest/settings" -type f | wc -l)
+        if [ "$src_count" -ne "$dst_count" ]; then
+            echo "[backup] ERROR: settings copy incomplete ($dst_count of $src_count): $dest" >&2
+            return 1
+        fi
+    fi
 
     # Resource packs under packs/ are externally sourced and regenerable;
     # they stay out of the snapshot. Rebuild recipe and hash: PAPER-WORLD-SOP.md §4.

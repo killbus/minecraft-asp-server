@@ -8,6 +8,7 @@ REM
 REM  Scope (see docs/PAPER-WORLD-SOP.md - not regenerable):
 REM    world/ + whitelist/ban/usercache/ops json + server config
 REM    + config/ (Paper) + per-plugin config dirs (jars excluded)
+REM    + settings/*.json (per-host coordinates; *.example.json excluded)
 REM    Known-regenerable plugin caches are excluded (see below).
 REM  Output: <target>\<UTC timestamp>\ with MANIFEST.txt
 REM
@@ -26,6 +27,7 @@ REM    KEEP                  complete backups kept per target (default 5)
 REM    BACKUP_MIN_INTERVAL   skip when every target already has a complete
 REM                          backup younger than this many minutes
 REM                          (default 0 = never skip)
+REM    SETTINGS_DIR          per-host settings source (default ..\settings)
 REM    BACKUP_REQUIRE_ALL=1  a failed mirror fails the run (default 0)
 REM    ALLOW_ONLINE=1        proceed even though the server is running
 REM ============================================================
@@ -52,6 +54,7 @@ if defined BACKUP_ROOT set "BACKUP_TARGETS=%BACKUP_ROOT%"
 if not defined KEEP set "KEEP=5"
 if not defined BACKUP_MIN_INTERVAL set "BACKUP_MIN_INTERVAL=0"
 if not defined BACKUP_REQUIRE_ALL set "BACKUP_REQUIRE_ALL=0"
+if not defined SETTINGS_DIR set "SETTINGS_DIR=%~dp0..\settings"
 if "%~1"=="" (set "SERVER_DIR=%~dp0..\server") else (set "SERVER_DIR=%~1")
 set "ERRMSG="
 
@@ -227,6 +230,17 @@ for /d %%d in ("%SERVER_DIR%\plugins\*") do (
 )
 if defined ERRMSG goto :dt_fail
 copy /Y "%SERVER_DIR%\plugins\*.yml" "%DEST%\plugins\" >nul 2>nul
+
+REM --- per-host settings: untracked, so the snapshot is their only copy ---
+REM git tracks settings\*.example.json only. The file that fills the
+REM placeholders is host state, not source: it cannot be reconstructed from
+REM the repository, and it is what explains the rendered server.properties
+REM and plugin yml beside it. See docs\PAPER-WORLD-SOP.md section 7b.
+if exist "%SETTINGS_DIR%" (
+    robocopy "%SETTINGS_DIR%" "%DEST%\settings" /MIR /XF *.example.json /NFL /NDL /NJH /NJS /NP >nul
+    if errorlevel 8 set "ERRMSG=settings copy failed (robocopy exit !errorlevel!)"
+)
+if defined ERRMSG goto :dt_fail
 
 REM Resource packs under packs/ are externally sourced and regenerable; they
 REM stay out of the snapshot. Rebuild recipe and hash: PAPER-WORLD-SOP.md §4.

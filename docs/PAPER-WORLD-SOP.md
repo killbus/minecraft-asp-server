@@ -221,6 +221,10 @@ PackManagerPro sends the pack on join and on `PlayerChangedWorldEvent`. A world
 with an empty `pack-url` clears the previous pack. Restart the server or run
 `pmp reload` after editing the file.
 
+The URL in the deployed file is rendered from `PACK_URL` in
+`settings/<host>.json`, which is gitignored: the value above is the
+template's local-only default, not a host coordinate.
+
 The pack file lives in `server/packs/` and is served by
 `scripts/serve_packs.py`, which maps that directory to the URL prefix
 `/packs/` (the mux forwards the path unchanged, so the prefix cannot be
@@ -348,6 +352,8 @@ end, and `trials` together. The backup scripts copy, in one snapshot:
   `spigot.yml`, `commands.yml`, `permissions.yml`, `server-icon.png`,
   `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json`
 - `server/config/`
+- `settings/*.json`, minus `*.example.json` - the per-host coordinates that
+  produced the rendered files above, and the only copy git does not hold
 
 That set is wider than the `source` class in section 7b on purpose. A
 snapshot answers "what did this host look like at that instant", so it
@@ -427,6 +433,7 @@ now lives in this repository instead:
 | source | a human edits it to define behaviour, identical on every host | `config/` + `config.lock.json` |
 | secret | a value inside a source file that the operator supplies | `${NAME}`, rendered on apply |
 | instance | produced by play or by the host; never committed, never applied | stays in `server/` |
+| host | per-host coordinates the operator supplies outside `config/`, so a pull never reconciles them | `settings/<host>.json` (untracked; the example is tracked) |
 
 Source: `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`,
 `permissions.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`,
@@ -441,15 +448,19 @@ Apply on a stopped host:
 
 ```text
 git pull
+# first deploy on this host only: create the untracked coordinates
+[ -f settings/minecraft-server.json ] || cp settings/minecraft-server.example.json settings/minecraft-server.json
 python -B scripts/apply_config.py --dry-run --settings settings/minecraft-server.json
 python -B scripts/apply_config.py --settings settings/minecraft-server.json
 python -B scripts/verify_runtime.py
 scripts/start.sh
 ```
 
-Per-host coordinates live in `settings/<host>.json`, which is tracked and
-reviewable: `PACK_URL`, `GEYSER_ADVERTISE_ADDRESS`, and any other public value
-that differs between hosts. The credential is written there as
+Per-host coordinates live in `settings/<host>.json`: `PACK_URL`,
+`GEYSER_ADVERTISE_ADDRESS`, and any other public value that differs between
+hosts. The tracked file is `settings/<host>.example.json`; the real one is
+gitignored, created once per host from that example, and carried by the
+server snapshot. The credential is written there as
 `env:MANAGEMENT_SERVER_SECRET` and exported in the shell that runs the tool,
 so the file never holds a secret. Precedence is `--set` > settings file >
 environment > manifest default > refuse; `--set` stays the one-off override.

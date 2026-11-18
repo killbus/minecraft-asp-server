@@ -94,6 +94,7 @@ declarative yml on a deployed host. They are tracked in this repository:
 `config/` holds the templates and `config.lock.json` holds each SHA-256.
 
 ```text
+[ -f settings/minecraft-server.json ] || cp settings/minecraft-server.example.json settings/minecraft-server.json
 python -B scripts/apply_config.py --check --settings settings/minecraft-server.json
 python -B scripts/apply_config.py --dry-run --settings settings/minecraft-server.json
 python -B scripts/apply_config.py --settings settings/minecraft-server.json
@@ -104,11 +105,14 @@ matches, 1 when it differs, and 2 when the bundle is unsafe (hash drift, an
 instance path, a missing value). See
 [PAPER-WORLD-SOP.md](./PAPER-WORLD-SOP.md) section 7b for the class rule.
 
-`settings/<host>.json` holds the public per-host coordinates. The credential
-is written as `env:MANAGEMENT_SERVER_SECRET` and exported in the shell, so the
-tracked file holds no secret. Precedence is `--set` > settings > environment >
-manifest default; `--set` remains the one-off override. Never put the
-settings file in `config/` - every file there must mirror a `server/` path.
+`settings/<host>.json` holds the public per-host coordinates. The `cp` above
+is the first deploy on a host only: the real file is gitignored, the tracked
+one is `settings/<host>.example.json`, and the snapshot in section 7 is the
+copy that survives. The credential is written as
+`env:MANAGEMENT_SERVER_SECRET` and exported in the shell, so the file holds no
+secret. Precedence is `--set` > settings > environment > manifest default;
+`--set` remains the one-off override. Never put the settings file in
+`config/` - every file there must mirror a `server/` path.
 
 ## 3. Import an existing world
 
@@ -145,6 +149,9 @@ the next run and never count them against retention.
    `plugins/<name>/` (including `plugins/Geyser-Spigot/nethernet/`, which
    keeps the server's Warden host name), `plugins/*.yml`, and the top-level
    `*.json`, `*.yml`, `server.properties`, `eula.txt`, `server-icon.png`.
+   Restore `settings/*.json` under the repository's `settings/` directory,
+   not `server/`: it is the deploy input, and a snapshot's copy belongs to
+   the host it came from.
    Plugin jars are not in the backup. Reconcile them with the lock revision
    associated with this backup before starting; a newer plugin may not work
    with older restored data. See section 4.1.

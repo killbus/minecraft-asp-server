@@ -73,10 +73,17 @@ Settings shape, also optional:
 ```
 
 A settings file holds per-host coordinates: public values that differ between
-hosts and are worth reviewing in a diff. It is named after the host and
-passed explicitly with `--settings`; nothing reads `settings/` implicitly.
-It lives outside `config/`, because `config/` is a byte-for-byte mirror of
-`server/` and a settings file has no destination path.
+hosts. It is named after the host and passed explicitly with `--settings`;
+nothing reads `settings/` implicitly. It lives outside `config/`, because
+`config/` is a byte-for-byte mirror of `server/` and a settings file has no
+destination path.
+
+Git tracks `settings/<host>.example.json` only. `settings/<host>.json` is
+gitignored, so `git pull` on a host never has to merge a coordinate the
+repository cannot know, and the example cannot silently become a second, stale
+deployment. That untracked-ness makes the file instance state: it is part of
+the server snapshot described in `docs/PAPER-WORLD-SOP.md` section 7, and that
+snapshot's copy is restored only onto the host it came from.
 
 The file has exactly two keys: `schema_version` and `values`. `values` keys
 are placeholder names, not paths. A key no template declares is refused, so a
@@ -154,9 +161,10 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 ### 5. Good / Base / Bad Cases
 
 - Good: `--check` on the live tree exits 0 with 28 `UNCHANGED` lines.
-- Base: a fresh host gets 28 `CREATE` lines and needs `PACK_URL`,
-  `GEYSER_ADVERTISE_ADDRESS` and `MANAGEMENT_SERVER_SECRET` supplied; the
-  first two come from `settings/<host>.json`, the last from the environment.
+- Base: a fresh host copies `settings/<host>.example.json` to
+  `settings/<host>.json`, edits the coordinates, and gets 28 `CREATE` lines;
+  `PACK_URL` and `GEYSER_ADVERTISE_ADDRESS` come from that file, the credential
+  from the environment.
 - Good: `--settings settings/minecraft-server.json` with
   `MANAGEMENT_SERVER_SECRET` exported renders the same bytes as three
   `--set` flags, and the file itself holds no credential.
@@ -166,8 +174,11 @@ difference, `2` = refused, nothing written. Errors go to stderr as
   `join-destination: world` sends players to a missing destination.
 - Bad: giving `PACK_URL` a default so the tool "just works". The default
   would point every host at one host's address.
-- Bad: putting a credential literal in `settings/<host>.json`. It is a git
-  target, so the credential leaks on the first push.
+- Bad: putting a credential literal in `settings/<host>.json`. The file is
+  copied with the world into every snapshot, so the credential leaks there.
+- Bad: committing the production `settings/<host>.json`. Coordinates are host
+  state, not source: a tracked copy turns every pull into a merge and hands a
+  new host another host's answer.
 - Bad: putting the settings file in `config/`. Every file there needs a
   `server/` destination, and `plan()` refuses one that no manifest declares.
 
@@ -188,6 +199,8 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 - `..` path never reaches the server dir; duplicate JSON key
 - CRLF template keeps CRLF (server.properties is CRLF on this host)
 - round-trip against a fixture `server/`, and against the live `server/` when present
+- backup snapshots `settings/*.json`, omits `*.example.json`, and lists the
+  copied file in `MANIFEST.txt`
 
 ### 7. Wrong vs Correct
 
@@ -197,10 +210,18 @@ Wrong:
 copy server/plugins/Multiverse-Core server/plugins/PackManagerPro ...
 ```
 
+Wrong:
+
+```text
+git add settings/minecraft-server.json
+```
+
 Correct:
 
 ```text
 git pull
+[ -f settings/minecraft-server.json ] || cp settings/minecraft-server.example.json settings/minecraft-server.json
+# edit the coordinates; the file stays untracked and lands in the next snapshot
 python -B scripts/apply_config.py --check --settings settings/minecraft-server.json
 python -B scripts/apply_config.py --settings settings/minecraft-server.json
 ```

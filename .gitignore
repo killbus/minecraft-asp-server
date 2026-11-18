@@ -11,6 +11,10 @@ artifacts/
 # local backup output (scripts/backup.cmd, scripts/backup.sh)
 backups/
 
+# per-host deployment coordinates; only the example is tracked
+settings/*.json
+!settings/*.example.json
+
 # Python bytecode (tests import scripts/ as a namespace package)
 __pycache__/
 *.pyc
