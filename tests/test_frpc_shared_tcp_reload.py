@@ -18,8 +18,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,9 +33,7 @@ LINUX = sys.platform.startswith("linux")
 @unittest.skipIf(SH is None, "POSIX sh is not available")
 class ReloadTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = self.enterContext(scratch.directory("frpc-reload-"))
         # A relative pidfile: the scene resolves it against the caller's
         # directory, which is this repository root.
         self.pidfile = Path(".tmp") / f"reload-test-{os.getpid()}" / "haproxy.pid"

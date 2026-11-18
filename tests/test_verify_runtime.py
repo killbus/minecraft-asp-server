@@ -10,9 +10,10 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
 from unittest.mock import patch
+
+from tests import scratch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "verify_runtime.py"
@@ -23,9 +24,7 @@ SPEC.loader.exec_module(verifier)
 
 class RuntimeVerificationTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = self.enterContext(scratch.directory("verify-runtime-"))
         self.server = self.directory / "server"
         self.server.mkdir()
         self.lock_path = self.directory / "runtime.lock.json"

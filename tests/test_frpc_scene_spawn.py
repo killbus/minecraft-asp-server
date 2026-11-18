@@ -16,8 +16,9 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,9 +51,7 @@ DRY_RUN_SIDECAR = re.compile(r"respawn-window -k -t <window-id> (cd .*)$", re.MU
 @unittest.skipIf(SH is None, "POSIX sh is not available")
 class FrpcSceneSpawnTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.base = Path(self.temporary.name)
+        self.base = self.enterContext(scratch.directory("frpc-spawn-"))
         self.stubs = self.base / "stubs"
         self.stubs.mkdir()
         (self.stubs / "tmux").write_bytes(STUB_TMUX.encode())

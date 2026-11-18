@@ -11,8 +11,9 @@ import shutil
 import shlex
 import socket
 import subprocess
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,9 +37,7 @@ PACKS_BACKEND = "    server packs 127.0.0.1:8000"
 @unittest.skipIf(SH is None, "POSIX sh is not available")
 class SharedTcpSceneTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = self.enterContext(scratch.directory("frpc-shared-scene-"))
         self.configs = self.directory / "configs"
         self.configs.mkdir()
         (self.configs / "frpc.toml").write_text("serverAddr = 'example.org'\n", encoding="utf-8")

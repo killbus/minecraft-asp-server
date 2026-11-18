@@ -7,8 +7,9 @@ import io
 import json
 import os
 from pathlib import Path
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "import_trials.py"
@@ -32,9 +33,7 @@ def write(path, content):
 
 class ImportTrialsTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = self.enterContext(scratch.directory("import-trials-"))
         self.source = self.root / "source" / "Trials of the past"
         self.destination = self.root / "artifacts" / "trials-legacy"
         self.lock_path = self.root / "artifacts.lock.json"

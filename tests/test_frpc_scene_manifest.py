@@ -16,8 +16,9 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,9 +73,7 @@ def write_scene(path, text):
 @unittest.skipIf(SH is None, "POSIX sh is not available")
 class SceneManifestTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.base = Path(self.temporary.name)
+        self.base = self.enterContext(scratch.directory("frpc-manifest-"))
         self.scenes = self.base / "scenes"
         self.scenes.mkdir()
         self.stubs = self.base / "stubs"

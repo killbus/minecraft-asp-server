@@ -6,12 +6,12 @@ import http.server
 import io
 import json
 import os
-import tempfile
 import threading
 import unittest
 from pathlib import Path
 
 from scripts import install_runtime
+from tests import scratch
 
 
 PAYLOAD = b"runtime-bytes"
@@ -50,9 +50,7 @@ class InstallRuntimeTests(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.directory = Path(temporary.name)
+        self.directory = self.enterContext(scratch.directory("install-runtime-"))
         self.server_dir = self.directory / "server"
         self.server_dir.mkdir()
         self.lock = self.directory / "runtime.lock.json"

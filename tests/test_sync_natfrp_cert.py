@@ -20,12 +20,13 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import unittest
 from unittest.mock import patch
 import urllib.parse
+
+from tests import scratch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "sync_natfrp_cert.py"
@@ -52,32 +53,36 @@ def pair_for(name):
     """A throwaway self-signed pair for one name, made once per test run."""
     if name in _PAIRS:
         return _PAIRS[name]
-    directory = tempfile.mkdtemp(prefix="asp-cert-fixture-")
-    work = Path(directory)
-    certificate = work / "cert.pem"
-    key = work / "key.pem"
-    config = work / "openssl.cnf"
-    config.write_text(
-        "[req]\n"
-        "distinguished_name = dn\n"
-        "prompt = no\n"
-        "x509_extensions = v3\n"
-        "[dn]\n"
-        f"CN = {name}\n"
-        "[v3]\n"
-        f"subjectAltName = DNS:{name}\n",
-        encoding="utf-8",
-    )
-    result = subprocess.run(
-        sync.openssl() + [
-            "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
-            "-config", str(config), "-keyout", str(key), "-out", str(certificate),
-        ],
-        capture_output=True, text=True, check=False,
-    )
-    if result.returncode != 0:
-        raise AssertionError(f"openssl could not make a test pair: {result.stderr.strip()}")
-    _PAIRS[name] = (certificate.read_text(encoding="utf-8"), key.read_text(encoding="utf-8"))
+    with scratch.directory("cert-fixture-") as work:
+        certificate = work / "cert.pem"
+        key = work / "key.pem"
+        config = work / "openssl.cnf"
+        config.write_text(
+            "[req]\n"
+            "distinguished_name = dn\n"
+            "prompt = no\n"
+            "x509_extensions = v3\n"
+            "[dn]\n"
+            f"CN = {name}\n"
+            "[v3]\n"
+            f"subjectAltName = DNS:{name}\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            sync.openssl() + [
+                "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                "-config", str(config), "-keyout", str(key), "-out", str(certificate),
+            ],
+            capture_output=True, text=True, check=False,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"openssl could not make a test pair: {result.stderr.strip()}"
+            )
+        _PAIRS[name] = (
+            certificate.read_text(encoding="utf-8"),
+            key.read_text(encoding="utf-8"),
+        )
     return _PAIRS[name]
 
 
@@ -209,9 +214,7 @@ class StubApi:
 
 class SyncNatfrpCertTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.base = Path(self.temporary.name)
+        self.base = self.enterContext(scratch.directory("sync-cert-"))
         self.out = self.base / "tls" / "1-mc.r00000000.nyat.app.pem"
         self.marker = self.base / "reloaded.txt"
         self.api = StubApi()

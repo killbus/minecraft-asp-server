@@ -15,11 +15,12 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
 from unittest.mock import patch
+
+from tests import scratch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "plain_website_check.py"
@@ -107,9 +108,8 @@ class PlainWebsiteCheckTests(unittest.TestCase):
         return code, output.getvalue(), errors.getvalue()
 
     def empty_path(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        return patch.dict(os.environ, {"PATH": directory.name})
+        directory = self.enterContext(scratch.directory("empty-path-"))
+        return patch.dict(os.environ, {"PATH": str(directory)})
 
     def free_port(self):
         return check.free_port()
@@ -131,18 +131,17 @@ class PlainWebsiteCheckTests(unittest.TestCase):
             return False
 
     def stub_haproxy_on_path(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        stub = Path(directory.name) / "stub.py"
+        directory = self.enterContext(scratch.directory("stub-haproxy-"))
+        stub = directory / "stub.py"
         stub.write_text(STUB_HAPROXY, encoding="utf-8")
         if os.name == "nt":
-            launcher = Path(directory.name) / "haproxy.cmd"
+            launcher = directory / "haproxy.cmd"
             launcher.write_text(f'@"{sys.executable}" -B "{stub}" %*\n', encoding="utf-8")
         else:
-            launcher = Path(directory.name) / "haproxy"
+            launcher = directory / "haproxy"
             launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" -B "{stub}" "$@"\n', encoding="utf-8")
             launcher.chmod(0o755)
-        return patch.dict(os.environ, {"PATH": directory.name})
+        return patch.dict(os.environ, {"PATH": str(directory)})
 
     def mock_tunnel(self, port):
         """A stand-in for frps and frpc: a plain forwarder to a local port."""

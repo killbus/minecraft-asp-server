@@ -6,8 +6,9 @@ import importlib.util
 import io
 import json
 from pathlib import Path
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "verify_artifacts.py"
@@ -26,9 +27,7 @@ def tree_sha256(root):
 
 class ArtifactVerificationTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = self.enterContext(scratch.directory("verify-artifacts-"))
         self.tree = self.root / "artifacts" / "example"
         (self.tree / "region").mkdir(parents=True)
         (self.tree / "region" / "r.0.0.mca").write_bytes(b"region content")

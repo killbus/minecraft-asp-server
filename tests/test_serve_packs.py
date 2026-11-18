@@ -4,12 +4,12 @@ import http.client
 import functools
 import subprocess
 import sys
-import tempfile
 import threading
 import unittest
 from pathlib import Path
 
 from scripts import serve_packs
+from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,9 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PrefixedServerTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name) / "packs"
+        self.root = self.enterContext(scratch.directory("serve-packs-")) / "packs"
         self.root.mkdir()
         (self.root / "pack-a.zip").write_bytes(b"PK\x03\x04payload")
         (self.root.parent / "secret.txt").write_text("no", encoding="utf-8")

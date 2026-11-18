@@ -10,8 +10,9 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,9 +24,7 @@ SH = shutil.which("sh")
 @unittest.skipIf(SH is None, "POSIX sh is not available")
 class FrpcConfigDiscoveryTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name) / "frpcs"
+        self.directory = self.enterContext(scratch.directory("frpc-configs-")) / "frpcs"
         self.directory.mkdir()
 
     def write(self, name):

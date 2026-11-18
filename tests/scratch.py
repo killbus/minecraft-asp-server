@@ -32,11 +32,16 @@ def remove(path):
             time.sleep(0.05 * 2**attempt)
 
 
+def mkdtemp(prefix="test-"):
+    """Create a scratch directory that outlives one test, for module fixtures."""
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=SCRATCH))
+
+
 @contextmanager
 def directory(prefix="test-"):
     """Yield a unique directory under ``.tmp/`` and remove it afterwards."""
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    path = Path(tempfile.mkdtemp(prefix=prefix, dir=SCRATCH))
+    path = mkdtemp(prefix)
     try:
         yield path
     finally:
