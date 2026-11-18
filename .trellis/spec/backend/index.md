@@ -21,6 +21,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [frpc Scenes](./frpc-scenes.md) | Declarative optional frpc process composition | Active |
 | [World Artifacts](./world-artifacts.md) | Immutable Anvil artifacts, rebuild/verify contracts, exit codes | Active |
+| [Runtime Inventory](./runtime-inventory.md) | `runtime.lock.json`, read-only verification, installer contract | Active |
 
 ---
 

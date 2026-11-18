@@ -249,6 +249,19 @@ against an upstream release.
 
 **Install or upgrade:**
 
+`python -B scripts/install_runtime.py` materialises the lock instead of
+leaving each file to a manual download. It treats the lock as the only
+source of truth: a present file whose SHA-256 matches is `OK` and skipped;
+a present file that differs is `DRIFT` and is not touched without
+`--replace`; a missing file with a `download_url` is streamed to a
+`.part` file, hashed, and renamed into place only after the hash matches;
+one without a URL is `MANUAL` and named with its `source`. `--dry-run`
+makes no request and writes nothing, `--only ID` narrows the selection,
+and exit codes are **0** = every selected artifact is present and
+matching, **1** = something is `MANUAL`, `DRIFT` or failed, **2** = invalid
+lock or arguments. It never creates plugin data, edits a config, or
+touches `world/`.
+
 1. Choose the exact artifact and record its project/release URL and
    version. Stop the server and run `scripts/backup.cmd` (Windows) or
    `sh scripts/backup.sh` (POSIX); confirm a successful complete backup.
