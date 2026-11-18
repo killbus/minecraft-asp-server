@@ -16,8 +16,11 @@ needs).
 ## 3. `scripts/apply_config.py`
 
 - `--config-dir` (default `config`), `--lock`, `--server-dir`, `--set NAME=VALUE`
-  (repeatable), `--dry-run`, `--check`.
-- values from `--set` first, then the environment.
+  (repeatable), `--settings`, `--dry-run`, `--check`.
+- values from `--set` first, then `--settings`, then the environment, then
+  the manifest default. A settings key no template declares is refused.
+- a settings value written `env:NAME` is read from the environment; an unset
+  variable is refused rather than rendered blank.
 - import `safe_path` from `verify_runtime`.
 - class check against an explicit instance-pattern list, not only the
   manifest, so an edited manifest cannot smuggle `worlds.yml` in.
@@ -26,12 +29,15 @@ needs).
 
 `tests/test_apply_config.py`: render, missing value, unknown placeholder,
 unescaped `${` in a value, instance path, path escape, hash drift, dry-run,
-check, and a round-trip against a fixture `server/`.
+check, settings precedence, `env:` resolution and refusal, and a round-trip
+against a fixture `server/`.
 
 ## 5. Docs
 
 - `docs/PAPER-WORLD-SOP.md` section 7: three classes and what may be copied.
 - `docs/ASP-SOP.md`: deploy flow for a host.
+- `settings/README.md`: the file shape, what may be a literal, and why a
+  credential is only ever `env:NAME`.
 - `.trellis/spec/backend/runtime-inventory.md` or a sibling: the apply
   contract, since it shares the lock/manifest discipline.
 - Remove the two claims that a rollback copy exists at

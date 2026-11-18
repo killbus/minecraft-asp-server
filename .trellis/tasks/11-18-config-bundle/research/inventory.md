@@ -14,6 +14,10 @@ legitimately have different bytes?
 
 ## Source, bundled (28)
 
+Per-host coordinates are not bundled into `config/`: they live in
+`settings/<host>.json`, which the apply tool reads only when `--settings`
+names it. `config/` stays a byte-for-byte mirror of `server/`.
+
 | Path | Bytes | Placeholder | Note |
 | --- | --- | --- | --- |
 | `server.properties` | 1840 | `MANAGEMENT_SERVER_SECRET` | CRLF. `rcon.password` is empty and `enable-rcon=false`, so no RCON placeholder |
@@ -103,13 +107,16 @@ legitimately have different bytes?
 
 ## Reproducibility check
 
-`python -B scripts/apply_config.py --dry-run` against the live tree with
+`python -B scripts/apply_config.py --dry-run --settings settings/<host>.json`
+against the live tree with
 
 ```text
-MANAGEMENT_SERVER_SECRET=<rcon/management secret>
 PACK_URL=http://127.0.0.1:8000/packs/pack-a.zip
 GEYSER_ADVERTISE_ADDRESS=frp-net.com:34003
 ```
+
+and `MANAGEMENT_SERVER_SECRET` exported in the environment (the settings file
+holds `env:MANAGEMENT_SERVER_SECRET`).
 
 reports `UNCHANGED` for all 28 files, 0 `CREATE`, 0 `UPDATE`.
 

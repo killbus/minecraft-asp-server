@@ -441,19 +441,21 @@ Apply on a stopped host:
 
 ```text
 git pull
-python -B scripts/apply_config.py --dry-run \
-  --set PACK_URL=http://<public>:<port>/packs/pack-a.zip \
-  --set GEYSER_ADVERTISE_ADDRESS=<public>:34003 \
-  --set MANAGEMENT_SERVER_SECRET=<secret>
-python -B scripts/apply_config.py \
-  --set PACK_URL=http://<public>:<port>/packs/pack-a.zip \
-  --set GEYSER_ADVERTISE_ADDRESS=<public>:34003 \
-  --set MANAGEMENT_SERVER_SECRET=<secret>
+python -B scripts/apply_config.py --dry-run --settings settings/minecraft-server.json
+python -B scripts/apply_config.py --settings settings/minecraft-server.json
 python -B scripts/verify_runtime.py
 scripts/start.sh
 ```
 
-`--set` wins over the environment, so the same value can be exported instead.
+Per-host coordinates live in `settings/<host>.json`, which is tracked and
+reviewable: `PACK_URL`, `GEYSER_ADVERTISE_ADDRESS`, and any other public value
+that differs between hosts. The credential is written there as
+`env:MANAGEMENT_SERVER_SECRET` and exported in the shell that runs the tool,
+so the file never holds a secret. Precedence is `--set` > settings file >
+environment > manifest default > refuse; `--set` stays the one-off override.
+Nothing reads `settings/` implicitly, and the file is not under `config/`
+because every file there must mirror a `server/` path.
+
 The tool verifies each template's SHA-256 against `config.lock.json` before
 writing, refuses any path classed instance, refuses a placeholder the
 manifest does not declare, and refuses a value that still contains `${`.

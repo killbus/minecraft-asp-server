@@ -44,7 +44,14 @@ binaries.
 - R6. No instance path can be added to the manifest: the apply tool and its
   tests enforce the class rule, not a comment.
 - R7. Documentation states the operator flow: stop the server, `git pull`,
-  `apply_config.py --set PACK_URL=...`, start.
+  `apply_config.py --settings settings/<host>.json`, start.
+- R8. Per-host coordinates live in a tracked `settings/<host>.json`, passed
+  explicitly with `--settings`. It is outside `config/`, because every file
+  there must mirror a `server/` path. A credential is written
+  `env:VARIABLE` and resolved from the environment at render time, never as
+  a literal. Precedence is `--set` > settings > environment > manifest
+  default > refuse; a settings key no template declares, a blank value, a
+  `${` value, a wrong schema, or an unset `env:` target exits 2.
 
 ## Acceptance Criteria
 

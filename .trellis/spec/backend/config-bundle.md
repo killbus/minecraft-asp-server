@@ -13,14 +13,16 @@ This spec applies when changing:
 
 - `config/`
 - `config.lock.json`
+- `settings/`
 - `scripts/apply_config.py`
 - `tests/test_apply_config.py`
 - the backup/snapshot descriptions in `docs/PAPER-WORLD-SOP.md` section 7
   and `docs/ASP-SOP.md` section 2a
 
-It is triggered because the tree, the manifest, and the tool form one
-contract: the manifest describes the tree, the tool refuses to drift from
-the manifest, and the docs tell an operator which bytes may be copied.
+It is triggered because the tree, the manifest, the settings file and the
+tool form one contract: the manifest describes the tree, the tool refuses to
+drift from the manifest, and the docs tell an operator which bytes may be
+copied.
 
 `server/` stays gitignored. It is instance state plus downloaded binaries, and
 it is never a commit target.
@@ -30,12 +32,13 @@ it is never a commit target.
 ```sh
 python -B scripts/apply_config.py \
     [--config-dir config] [--lock config.lock.json] [--server-dir server] \
-    [--set NAME=VALUE]... [--dry-run | --check]
+    [--settings settings/<host>.json] [--set NAME=VALUE]... \
+    [--dry-run | --check]
 ```
 
-Values resolve as: `--set` first, then the process environment, then the
-manifest default, then refuse. `--dry-run` and `--check` are
-mutually exclusive in effect; `--check` never writes.
+Values resolve as: `--set` first, then the settings file, then the process
+environment, then the manifest default, then refuse. `--dry-run` and
+`--check` are mutually exclusive in effect; neither writes.
 
 ### 3. Contracts
 
@@ -55,6 +58,33 @@ Manifest shape:
 
 `path` is server-relative POSIX. `sha256` describes the template as
 committed, placeholders and all. `default` is optional.
+
+Settings shape, also optional:
+
+```json
+{
+  "schema_version": 1,
+  "values": {
+    "PACK_URL": "http://<public>:<port>/packs/pack-a.zip",
+    "GEYSER_ADVERTISE_ADDRESS": "<public>:34003",
+    "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
+  }
+}
+```
+
+A settings file holds per-host coordinates: public values that differ between
+hosts and are worth reviewing in a diff. It is named after the host and
+passed explicitly with `--settings`; nothing reads `settings/` implicitly.
+It lives outside `config/`, because `config/` is a byte-for-byte mirror of
+`server/` and a settings file has no destination path.
+
+The file has exactly two keys: `schema_version` and `values`. `values` keys
+are placeholder names, not paths. A key no template declares is refused, so a
+typo cannot sit silent. A credential is never a literal: it is written
+`env:VARIABLE`, resolved from the process environment at render time, and
+refused when unset. A blank value, a value containing `${`, a wrong schema, an
+unknown top-level key, or an `env:` target that is not a variable name is
+refused.
 
 Class rule - would two hosts running the same world legitimately have
 different bytes?
@@ -80,6 +110,7 @@ Apply contract:
 6. status is `CREATE`, `UPDATE`, or `UNCHANGED` from a byte comparison
 7. a changed file is written to `<name>.tmp.<pid>` and `os.replace`d
 8. any file in the tree absent from the manifest makes the run refuse
+9. any settings key no manifest entry declares makes the run refuse
 
 A `default` in the manifest is permitted only for a plugin-generated
 telemetry identity (`FLOODGATE_METRICS_UUID`, `BSTATS_SERVER_UUID`): the value
@@ -107,6 +138,14 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 | Template holds an undeclared `${NAME}` | `ERROR: ... which the manifest does not declare`, exit 2 |
 | No value for a declared placeholder | `ERROR: no value for ${NAME}`, exit 2 |
 | A value still holds `${` | `ERROR: ... still contains a placeholder`, exit 2 |
+| Settings file absent or unreadable | `ERROR: cannot read settings ...`, exit 2 |
+| Settings JSON is malformed or a key repeats | `ERROR: settings are not valid JSON ...`, exit 2 |
+| Settings lack `schema_version: 1` or a `values` object | `ERROR: settings must ...`, exit 2 |
+| Settings hold a top-level key other than `schema_version`/`values` | `ERROR: settings hold an unknown key ...`, exit 2 |
+| Settings value is blank or holds `${` | `ERROR: settings value ...`, exit 2 |
+| Settings value is `env:NAME` and `NAME` is unset | `ERROR: ... needs NAME in the environment`, exit 2 |
+| Settings value is `env:` with no valid name | `ERROR: ... must be env:NAME`, exit 2 |
+| Settings key no template declares | `ERROR: settings names ..., which no template declares`, exit 2 |
 | File in the tree, absent from the manifest | `ERROR: ... not in the manifest`, exit 2 |
 | Manifest entry, absent from the tree | `ERROR: ... missing from`, exit 2 |
 | `..`, absolute path, or symlink escape | `ERROR`, exit 2 |
@@ -116,18 +155,31 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 
 - Good: `--check` on the live tree exits 0 with 28 `UNCHANGED` lines.
 - Base: a fresh host gets 28 `CREATE` lines and needs `PACK_URL`,
-  `GEYSER_ADVERTISE_ADDRESS` and `MANAGEMENT_SERVER_SECRET` supplied.
+  `GEYSER_ADVERTISE_ADDRESS` and `MANAGEMENT_SERVER_SECRET` supplied; the
+  first two come from `settings/<host>.json`, the last from the environment.
+- Good: `--settings settings/minecraft-server.json` with
+  `MANAGEMENT_SERVER_SECRET` exported renders the same bytes as three
+  `--set` flags, and the file itself holds no credential.
 - Bad: adding `plugins/Multiverse-Core/worlds.yml` to `config/` so "the host
   gets the same worlds". Multiverse writes that file from the worlds it
   finds; a copied one declares worlds the host does not have and
   `join-destination: world` sends players to a missing destination.
 - Bad: giving `PACK_URL` a default so the tool "just works". The default
   would point every host at one host's address.
+- Bad: putting a credential literal in `settings/<host>.json`. It is a git
+  target, so the credential leaks on the first push.
+- Bad: putting the settings file in `config/`. Every file there needs a
+  `server/` destination, and `plan()` refuses one that no manifest declares.
 
 ### 6. Tests Required
 
 - render, second-run `UNCHANGED`, `UPDATE` over a differing destination
 - value from the environment; `--set` wins over the environment
+- settings supply a value; `--set` wins over settings; settings win over the
+  environment
+- settings `env:NAME` resolves; an unset `env:` target is refused
+- settings blank value, `${` value, wrong schema, absent file, and a key no
+  template declares are each refused; an unknown top-level key is refused
 - missing value, malformed `--set`, undeclared placeholder, value holding `${`
 - `class: instance` refused; instance path refused even when class says source
 - template hash drift refused before any write
@@ -149,8 +201,8 @@ Correct:
 
 ```text
 git pull
-python -B scripts/apply_config.py --check
-python -B scripts/apply_config.py --set PACK_URL=... --set GEYSER_ADVERTISE_ADDRESS=... --set MANAGEMENT_SERVER_SECRET=...
+python -B scripts/apply_config.py --check --settings settings/minecraft-server.json
+python -B scripts/apply_config.py --settings settings/minecraft-server.json
 ```
 
 Wrong:

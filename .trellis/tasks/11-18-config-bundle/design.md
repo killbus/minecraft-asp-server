@@ -29,6 +29,7 @@ config/
   plugins/PackManagerPro/config.yml   # with ${PACK_URL}
   ...
 config.lock.json
+settings/minecraft-server.json    # per-host coordinates; credential as env:NAME
 ```
 
 Templates keep the original formatting; only the secret positions become
@@ -41,7 +42,7 @@ document's shape.
 for each manifest entry:
     template = config/<path>
     verify sha256(template) == entry.sha256      else REFUSE (2)
-    render ${NAME} from --set/ENV                 else REFUSE (2)
+    render ${NAME} from --set > settings > ENV     else REFUSE (2)
     destination = safe_path(server_dir, entry.path)
     classify(entry.path) must be source           else REFUSE (2)
     compare with destination
@@ -51,6 +52,20 @@ for each manifest entry:
 
 `apply_config.py` reuses `verify_runtime.safe_path` for the same reason the
 installer does: one escape rule in the project, not two.
+
+## Settings are not config
+
+`config/` is a byte-for-byte mirror of `server/`: every file in it has a
+destination path and a hash in the lock. A settings file has neither. It is a
+small map of placeholder name to value, so it lives in `settings/` at the top
+level and is passed explicitly. Nothing reads the directory implicitly, so a
+host without `--settings` behaves exactly as before.
+
+Two kinds of value go there. A coordinate - public address, public pack URL,
+port - is a literal, because it differs per host and a diff should show it.
+A credential is `env:VARIABLE`: the file names the variable, the process
+environment holds the value. That keeps the file safe to commit and keeps
+`--check` output safe to paste.
 
 ## Relationship to backups
 

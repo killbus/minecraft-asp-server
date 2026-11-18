@@ -94,15 +94,21 @@ declarative yml on a deployed host. They are tracked in this repository:
 `config/` holds the templates and `config.lock.json` holds each SHA-256.
 
 ```text
-python -B scripts/apply_config.py --check
-python -B scripts/apply_config.py --dry-run --set PACK_URL=...
-python -B scripts/apply_config.py --set PACK_URL=... --set GEYSER_ADVERTISE_ADDRESS=... --set MANAGEMENT_SERVER_SECRET=...
+python -B scripts/apply_config.py --check --settings settings/minecraft-server.json
+python -B scripts/apply_config.py --dry-run --settings settings/minecraft-server.json
+python -B scripts/apply_config.py --settings settings/minecraft-server.json
 ```
 
 Run it only with the server stopped. `--check` exits 0 when the host already
 matches, 1 when it differs, and 2 when the bundle is unsafe (hash drift, an
 instance path, a missing value). See
 [PAPER-WORLD-SOP.md](./PAPER-WORLD-SOP.md) section 7b for the class rule.
+
+`settings/<host>.json` holds the public per-host coordinates. The credential
+is written as `env:MANAGEMENT_SERVER_SECRET` and exported in the shell, so the
+tracked file holds no secret. Precedence is `--set` > settings > environment >
+manifest default; `--set` remains the one-off override. Never put the
+settings file in `config/` - every file there must mirror a `server/` path.
 
 ## 3. Import an existing world
 

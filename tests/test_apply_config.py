@@ -34,6 +34,7 @@ class ApplyConfigTests(unittest.TestCase):
         self.server = self.directory / "server"
         self.server.mkdir()
         self.lock_path = self.directory / "config.lock.json"
+        self.settings_path = self.directory / "settings.json"
         self.files = []
         self.environment = patch.dict(os.environ)
         self.environment.start()
@@ -65,6 +66,12 @@ class ApplyConfigTests(unittest.TestCase):
     def save(self):
         self.lock_path.write_text(
             json.dumps({"schema_version": 1, "files": self.files}), encoding="utf-8"
+        )
+
+    def save_settings(self, values, schema_version=1):
+        self.settings_path.write_text(
+            json.dumps({"schema_version": schema_version, "values": values}),
+            encoding="utf-8",
         )
 
     def run_tool(self, *args):
@@ -157,6 +164,107 @@ class ApplyConfigTests(unittest.TestCase):
         self.save()
         code, _, errors = self.run_tool("--set", "UNUSED=${X}")
         self.assertEqual(0, code, errors)
+
+    def test_settings_supply_the_values(self):
+        self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        self.save_settings({"PACK_URL": "http://host/a.zip"})
+        code, output, errors = self.run_tool("--settings", str(self.settings_path))
+        self.assertEqual(0, code, errors)
+        self.assertIn("settings   ", output)
+        self.assertIn(
+            b"url=http://host/a.zip",
+            (self.server / "server.properties").read_bytes(),
+        )
+
+    def test_set_wins_over_settings(self):
+        self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        self.save_settings({"PACK_URL": "http://host/a.zip"})
+        code, _, errors = self.run_tool(
+            "--settings",
+            str(self.settings_path),
+            "--set",
+            "PACK_URL=http://flag/b.zip",
+        )
+        self.assertEqual(0, code, errors)
+        self.assertIn(
+            b"url=http://flag/b.zip",
+            (self.server / "server.properties").read_bytes(),
+        )
+
+    def test_settings_win_over_the_environment(self):
+        self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        self.save_settings({"PACK_URL": "http://host/a.zip"})
+        os.environ["PACK_URL"] = "http://env/b.zip"
+        code, _, errors = self.run_tool("--settings", str(self.settings_path))
+        self.assertEqual(0, code, errors)
+        self.assertIn(
+            b"url=http://host/a.zip",
+            (self.server / "server.properties").read_bytes(),
+        )
+
+    def test_settings_env_reference_is_resolved(self):
+        self.add("server.properties", b"seed=${SECRET}\n", [{"name": "SECRET"}])
+        self.save()
+        self.save_settings({"SECRET": "env:SOURCE"})
+        with patch.dict(os.environ, {"SOURCE": "s3cret"}):
+            code, _, errors = self.run_tool("--settings", str(self.settings_path))
+        self.assertEqual(0, code, errors)
+        self.assertIn(b"seed=s3cret", (self.server / "server.properties").read_bytes())
+
+    def test_settings_env_reference_that_is_unset_is_refused(self):
+        self.add("server.properties", b"seed=${SECRET}\n", [{"name": "SECRET"}])
+        self.save()
+        self.save_settings({"SECRET": "env:ABSENT_VARIABLE"})
+        self.assert_refused("ABSENT_VARIABLE", "--settings", str(self.settings_path))
+        self.assertFalse((self.server / "server.properties").exists())
+
+    def test_settings_name_no_template_declares_is_refused(self):
+        self.add("server.properties", b"port=1\n")
+        self.save()
+        self.save_settings({"TYPO": "x"})
+        self.assert_refused("no template declares", "--settings", str(self.settings_path))
+
+    def test_settings_blank_value_is_refused(self):
+        self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        self.save_settings({"PACK_URL": ""})
+        self.assert_refused("nonblank", "--settings", str(self.settings_path))
+
+    def test_settings_value_that_holds_a_placeholder_is_refused(self):
+        self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        self.save_settings({"PACK_URL": "${HOST}/a.zip"})
+        self.assert_refused("must not hold", "--settings", str(self.settings_path))
+
+    def test_settings_require_schema_version_one(self):
+        self.add("server.properties", b"port=1\n")
+        self.save()
+        self.save_settings({"PACK_URL": "http://host/a.zip"}, schema_version=2)
+        self.assert_refused("schema_version 1", "--settings", str(self.settings_path))
+
+    def test_settings_file_that_is_absent_is_refused(self):
+        self.add("server.properties", b"port=1\n")
+        self.save()
+        self.assert_refused(
+            "cannot read settings", "--settings", str(self.directory / "nope.json")
+        )
+
+    def test_settings_unknown_top_level_key_is_refused(self):
+        self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        self.settings_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "value": {"PACK_URL": "http://host/a.zip"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assert_refused("unknown key", "--settings", str(self.settings_path))
 
     def test_default_renders_when_the_host_supplies_nothing(self):
         self.add(
@@ -440,26 +548,43 @@ class RepositoryConfigTests(unittest.TestCase):
         (Path(__file__).resolve().parents[1] / "server").is_dir(), "no live server tree"
     )
     def test_committed_bundle_round_trips_the_live_server(self):
-        # The real values live only in the gitignored server tree, so read them
-        # there instead of keeping a credential in the repository.
-        values = {
-            "MANAGEMENT_SERVER_SECRET": self.live_property(
-                "server.properties", "management-server-secret"
-            ),
-            "PACK_URL": self.live_yaml(
-                "plugins/PackManagerPro/config.yml",
-                "per-world-application",
-                "trials",
-                "pack-url",
-            ),
-            "GEYSER_ADVERTISE_ADDRESS": self.live_list_first(
-                "plugins/Geyser-Spigot/config.yml", "advertise-addresses"
-            ),
-        }
-        arguments = ["--dry-run"]
-        for name, value in values.items():
-            arguments.extend(["--set", f"{name}={value}"])
-        code, output, errors = self.run_tool(*arguments)
+        # The coordinates live only in the gitignored server tree; the
+        # credential comes from the environment. This is the documented deploy
+        # shape, so the settings path is exercised for real.
+        with tempfile.TemporaryDirectory() as temporary:
+            settings = Path(temporary) / "minecraft-server.json"
+            settings.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "values": {
+                            "PACK_URL": self.live_yaml(
+                                "plugins/PackManagerPro/config.yml",
+                                "per-world-application",
+                                "trials",
+                                "pack-url",
+                            ),
+                            "GEYSER_ADVERTISE_ADDRESS": self.live_list_first(
+                                "plugins/Geyser-Spigot/config.yml",
+                                "advertise-addresses",
+                            ),
+                            "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "MANAGEMENT_SERVER_SECRET": self.live_property(
+                        "server.properties", "management-server-secret"
+                    )
+                },
+            ):
+                code, output, errors = self.run_tool(
+                    "--check", "--settings", str(settings)
+                )
         self.assertEqual(0, code, errors)
         self.assertNotIn("CREATE", output)
         self.assertNotIn("UPDATE", output)

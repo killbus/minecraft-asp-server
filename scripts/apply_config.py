@@ -18,6 +18,8 @@ from verify_runtime import (
 )
 
 PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+VARIABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ENV_REFERENCE = "env:"
 
 # Instance state is never written from the bundle. These paths are produced by
 # the host while it runs, so a second host legitimately holds different bytes.
@@ -153,9 +155,61 @@ def read_values(assignments):
     return values
 
 
-def resolve(name, values, default):
+def read_settings(path):
+    """Read the per-host settings file.
+
+    A settings file holds deployment coordinates - values that are per host,
+    public, and worth reviewing in a diff. A credential is named as
+    ``env:VARIABLE`` and resolved from the process environment, so the file
+    stays safe to commit.
+    """
+    if path is None:
+        return {}
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError as error:
+        raise VerificationError(f"cannot read settings {path}: {error}") from error
+    try:
+        settings = json.loads(raw, object_pairs_hook=unique_json_object)
+    except ValueError as error:
+        raise VerificationError(f"settings are not valid JSON: {error}") from error
+    if not isinstance(settings, dict):
+        raise VerificationError("settings must be a JSON object")
+    unknown = sorted(set(settings) - {"schema_version", "values"})
+    if unknown:
+        raise VerificationError(f"settings hold an unknown key {unknown[0]!r}")
+    if settings.get("schema_version") != 1:
+        raise VerificationError("settings must declare schema_version 1")
+    declared = settings.get("values")
+    if not isinstance(declared, dict):
+        raise VerificationError("settings must hold a `values` object")
+    resolved = {}
+    for name, value in declared.items():
+        if not isinstance(value, str) or not value.strip():
+            raise VerificationError(f"settings value {name} must be a nonblank string")
+        if "${" in value:
+            raise VerificationError(f"settings value {name} must not hold a placeholder")
+        if value.startswith(ENV_REFERENCE):
+            variable = value[len(ENV_REFERENCE):]
+            if not VARIABLE.match(variable):
+                raise VerificationError(
+                    f"settings value {name} must be {ENV_REFERENCE}NAME, got {value!r}"
+                )
+            if variable not in os.environ:
+                raise VerificationError(
+                    f"settings value {name} needs {variable} in the environment"
+                )
+            resolved[name] = os.environ[variable]
+        else:
+            resolved[name] = value
+    return resolved
+
+
+def resolve(name, values, default, settings):
     if name in values:
         return values[name]
+    if name in settings:
+        return settings[name]
     if name in os.environ:
         return os.environ[name]
     if default is not None:
@@ -165,14 +219,14 @@ def resolve(name, values, default):
     )
 
 
-def render(payload, relative, specs, values):
+def render(payload, relative, specs, values, settings):
     def replace(match):
         name = match.group(1)
         if name not in specs:
             raise VerificationError(
                 f"{relative} uses ${{{name}}}, which the manifest does not declare"
             )
-        value = resolve(name, values, specs[name])
+        value = resolve(name, values, specs[name], settings)
         if "${" in value:
             raise VerificationError(
                 f"value for {name} still contains a placeholder: {value!r}"
@@ -187,12 +241,18 @@ def render(payload, relative, specs, values):
     return rendered.encode("utf-8")
 
 
-def plan(config_dir, server_dir, manifest, values):
+def plan(config_dir, server_dir, manifest, values, settings):
     """Return [(status, relative, destination, payload)] without writing anything."""
     root = Path(server_dir)
     if root.exists() and not root.is_dir():
         raise VerificationError(f"server directory is not a directory: {server_dir}")
     root = root.resolve()
+    declared = {name for entry in manifest.values() for name in entry["placeholders"]}
+    unknown = sorted(set(settings) - declared)
+    if unknown:
+        raise VerificationError(
+            f"settings names {unknown[0]}, which no template declares"
+        )
     results = []
     for relative, entry in manifest.items():
         if entry["class"] != "source":
@@ -215,7 +275,9 @@ def plan(config_dir, server_dir, manifest, values):
                 f" expected={entry['sha256'].lower()} actual={actual}"
             )
         destination = safe_path(root, relative)
-        payload = render(template.read_bytes(), relative, entry["placeholders"], values)
+        payload = render(
+            template.read_bytes(), relative, entry["placeholders"], values, settings
+        )
         if not destination.exists():
             results.append(("CREATE", relative, destination, payload))
         elif destination.is_file() and destination.read_bytes() == payload:
@@ -263,21 +325,26 @@ def main(argv=None):
     parser.add_argument("--config-dir", type=Path, default=repository / "config")
     parser.add_argument("--lock", type=Path, default=repository / "config.lock.json")
     parser.add_argument("--server-dir", type=Path, default=repository / "server")
+    parser.add_argument("--settings", type=Path, default=None)
     parser.add_argument("--set", dest="values", action="append", default=[], metavar="NAME=VALUE")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
     try:
         manifest = read_manifest(args.lock)
+        settings = read_settings(args.settings)
         results = plan(
             args.config_dir,
             args.server_dir,
             manifest,
             read_values(args.values),
+            settings,
         )
     except VerificationError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
+    if args.settings is not None:
+        print(f"settings   {args.settings}")
     for status, relative, _, _ in results:
         print(f"{status:<9} {relative}")
     if args.check:
