@@ -396,6 +396,23 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertIn("    server termination 127.0.0.1:25567", config)
         self.assertIn("frontend geyser_tls_termination", config)
         termination = config[config.index("frontend geyser_tls_termination"):]
+        # In tcp mode the switching rules run at the accept event, with an
+        # empty payload buffer, unless tcp-request content accept delays them
+        # until the decrypted request line has arrived. The shared frontend
+        # has always carried that pair; the terminating one must too, or
+        # is_packs can never be true and every request falls to Geyser.
+        http_acl = '    acl is_http payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "'
+        self.assertIn(http_acl, termination)
+        self.assertIn("    tcp-request inspect-delay 3s", termination)
+        self.assertIn("    tcp-request content accept if is_http", termination)
+        self.assertLess(
+            termination.index(http_acl),
+            termination.index("    tcp-request content accept if is_http"),
+        )
+        self.assertLess(
+            termination.index("    tcp-request content accept if is_http"),
+            termination.index("    use_backend packs if is_packs"),
+        )
         # The packs rule must decide before the remaining decrypted bytes go
         # to the signalling backend, the same way it does on the shared port.
         self.assertLess(

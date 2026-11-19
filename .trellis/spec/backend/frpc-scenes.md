@@ -118,7 +118,14 @@ contract:
   same ACL and `use_backend` move to the TLS-terminating frontend
   (`geyser_tls_termination`), ahead of `default_backend geyser_signaling`,
   and are dropped from `mc_shared`; the frontend is `mode tcp`, there is no
-  `mode http` and no new frontend;
+  `mode http` and no new frontend. That frontend keeps the content-wait pair
+  (`tcp-request inspect-delay 3s` +
+  `tcp-request content accept if is_http`) alongside its own `is_http`
+  method ACL: in `mode tcp` the switching rules are evaluated at the accept
+  event, so without the pair `payload()` reads an empty buffer and `is_packs`
+  is never true. With the pair absent the failure is not cosmetic - every
+  request silently lands on `default_backend geyser_signaling` and Geyser
+  answers 404 `content-length: 0`;
 - the frontend location of the rule is therefore the one variable: shared
   frontend without `--tls-cert`, terminating frontend with it. The backend,
   the ACL text and the prefix contract are unchanged;

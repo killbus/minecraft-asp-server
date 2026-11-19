@@ -1383,7 +1383,14 @@ because the same `GET` also matches `is_http`. With `--tls-cert` the route
 cannot be read at all from the first byte - that is a ClientHello - so the
 same ACL and backend ride the TLS-terminating frontend
 (`geyser_tls_termination`) ahead of `default_backend geyser_signaling`,
-deciding the decrypted request line there instead.
+deciding the decrypted request line there instead. That frontend repeats
+the content-wait pair with an `is_http` ACL of its own:
+`tcp-request inspect-delay 3s` and
+`tcp-request content accept if is_http`. In `mode tcp` the switching rules
+otherwise run at the accept event, before the decrypted bytes exist, so
+`is_packs` is never true and every request falls to Geyser - which answers
+`404` with `content-length: 0`. That is the failure mode to look for if the
+pair is dropped while moving the rule between frontends.
 
 The match is exactly `payload(0,<len>) -m beg "GET <prefix>"`, where
 `<len>` is the length of `GET ` plus the prefix: offset 0 of a fresh

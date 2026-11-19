@@ -79,8 +79,12 @@
 #  so http://<public-ip>:<port>/packs/<file> works without TLS or a name.
 #  With --tls-cert the same backend is reached over HTTPS: HAProxy
 #  terminates TLS on the second bind and routes by URL path there, because a
-#  ClientHello cannot be read as a payload match. MUX_PACKS_PREFIX sets the
-#  prefix (default /packs/; it must start and end with "/"). The TLS
+#  ClientHello cannot be read as a payload match. That frontend keeps its own
+#  tcp-request inspect-delay/content-accept pair: in tcp mode the switching
+#  rules run at the accept event, and without the wait the payload buffer is
+#  still empty, so the pack rule never fires and everything falls to Geyser.
+#  MUX_PACKS_PREFIX sets the prefix (default /packs/; it must start and end
+#  with "/"). The TLS
 #  branches, the plaintext Geyser branch and Java are untouched. The
 #  backend is somebody else's process: this scene forwards to it and
 #  reports whether it is reachable, nothing more.
@@ -541,7 +545,10 @@ EOF
 EOF
         if [ -n "$_ph_packs_endpoint" ]; then
             cat <<EOF
+    acl is_http payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "
     acl is_packs payload(0,$_ph_packs_len) -m beg "$_ph_packs_match"
+    tcp-request inspect-delay 3s
+    tcp-request content accept if is_http
     use_backend packs if is_packs
 EOF
         fi
