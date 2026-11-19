@@ -375,7 +375,7 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertLess(config.index(PACKS_USE),
                         config.index("    default_backend java"))
 
-    def test_packs_with_a_certificate_leaves_the_tls_shape_alone(self):
+    def test_packs_with_a_certificate_rides_the_terminating_frontend(self):
         certificate = self.pem("certs/site.pem")
 
         config = self.config(
@@ -383,13 +383,26 @@ class SharedTcpSceneTests(unittest.TestCase):
             "--packs", "127.0.0.1:8000",
         )
 
-        self.assertIn(PACKS_ACL, config)
+        # A ClientHello cannot be read as a payload match, so with TLS the
+        # route is not on the shared frontend; it is on the terminating one,
+        # where the decrypted request line is what the ACL reads.
+        shared = config[: config.index("frontend geyser_tls_termination")]
+        self.assertNotIn("is_packs", shared)
+        self.assertNotIn("mode http", "\n".join(config))
+        self.assertIn("    acl is_packs payload(0,11) -m beg \"GET /packs/\"", config)
         self.assertIn("    use_backend geyser_tls if is_tls", config)
         self.assertIn("    use_backend geyser_signaling if is_http", config)
         self.assertIn("backend geyser_tls", config)
         self.assertIn("    server termination 127.0.0.1:25567", config)
         self.assertIn("frontend geyser_tls_termination", config)
-        self.assertEqual([], [line for line in config if line.startswith("    mode http")])
+        termination = config[config.index("frontend geyser_tls_termination"):]
+        # The packs rule must decide before the remaining decrypted bytes go
+        # to the signalling backend, the same way it does on the shared port.
+        self.assertLess(
+            termination.index("    use_backend packs if is_packs"),
+            termination.index("    default_backend geyser_signaling"),
+        )
+        self.assertIn(PACKS_BACKEND, config)
         listener = self.terminating_bind(config)
         self.assertNotIn("accept-proxy", listener)
 

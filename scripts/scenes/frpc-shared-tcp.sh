@@ -73,17 +73,17 @@
 #  operator who does not want that exposure should choose a specific LAN
 #  address or supply a hand-written HAProxy configuration.
 #
-#  --packs HOST:PORT serves plaintext resource-pack downloads from the
-#  same shared port: a connection whose first bytes are "GET <prefix>"
-#  goes to that backend instead of Geyser, so
-#  http://<public-ip>:<port>/packs/<file> works without TLS or a name.
-#  The match reads offset 0 of a fresh connection, so a request that
-#  reuses a kept-alive connection, and an h2c preface, do not match and
-#  fall through to Geyser. MUX_PACKS_PREFIX sets the prefix (default
-#  /packs/; it must start and end with "/"). The TLS branches, the
-#  plaintext Geyser branch and Java are untouched. The backend is
-#  somebody else's process: this scene forwards to it and reports
-#  whether it is reachable, nothing more.
+#  --packs HOST:PORT serves resource-pack downloads from the entry. Without
+#  --tls-cert the route is plaintext on the shared port: a connection whose
+#  first bytes are "GET <prefix>" goes to that backend instead of Geyser,
+#  so http://<public-ip>:<port>/packs/<file> works without TLS or a name.
+#  With --tls-cert the same backend is reached over HTTPS: HAProxy
+#  terminates TLS on the second bind and routes by URL path there, because a
+#  ClientHello cannot be read as a payload match. MUX_PACKS_PREFIX sets the
+#  prefix (default /packs/; it must start and end with "/"). The TLS
+#  branches, the plaintext Geyser branch and Java are untouched. The
+#  backend is somebody else's process: this scene forwards to it and
+#  reports whether it is reachable, nothing more.
 #
 #  --serve-packs is the same route with the backend declared as this
 #  entry's own: it starts scripts/serve-packs.sh in a 'packs' window,
@@ -476,7 +476,7 @@ frontend mc_shared
     acl is_java payload(0,1) -m bin fe
     acl is_java payload(1,1) -m bin 00
 EOF
-    if [ -n "$_ph_packs_endpoint" ]; then
+    if [ -n "$_ph_packs_endpoint" ] && [ -z "$_ph_tls_certs" ]; then
         cat <<EOF
     acl is_packs payload(0,$_ph_packs_len) -m beg "$_ph_packs_match"
 EOF
@@ -485,7 +485,7 @@ EOF
     tcp-request inspect-delay 3s
     tcp-request content accept if is_tls or is_http or is_java
 EOF
-    if [ -n "$_ph_packs_endpoint" ]; then
+    if [ -n "$_ph_packs_endpoint" ] && [ -z "$_ph_tls_certs" ]; then
         cat <<EOF
     use_backend packs if is_packs
 EOF
@@ -538,6 +538,14 @@ EOF
         fi
         cat <<EOF
     bind $_ph_tls_listen ssl$_ph_crt_args$_ph_sni_arg
+EOF
+        if [ -n "$_ph_packs_endpoint" ]; then
+            cat <<EOF
+    acl is_packs payload(0,$_ph_packs_len) -m beg "$_ph_packs_match"
+    use_backend packs if is_packs
+EOF
+        fi
+        cat <<EOF
     default_backend geyser_signaling
 EOF
     fi

@@ -102,10 +102,11 @@ The scene must still make the input's validity observable:
 Replacing a PEM requires the existing `reload` verb to make HAProxy read it.
 The scene does not watch files or reload on its own.
 
-#### Resource-pack route (opt-in, plaintext)
+#### Resource-pack route (opt-in, plaintext or TLS)
 
-`--packs HOST:PORT` adds a destination for plaintext resource-pack downloads
-on the shared port. The contract:
+`--packs HOST:PORT` adds a destination for resource-pack downloads on the
+entry port. Without `--tls-cert` it is plaintext on the shared port. The
+contract:
 
 - the route is one ACL on `mc_shared`,
   `acl is_packs payload(0,N) -m beg "GET <prefix>"`, plus
@@ -113,8 +114,14 @@ on the shared port. The contract:
   request also matches `is_http`;
 - the backend is `mode tcp`, like every other backend in this file; HAProxy
   reads the bytes for the ACL and forwards the connection unchanged;
-- no `--tls-cert`, no `mode http`, no new frontend, and no change to
-  `geyser_tls`/`geyser_tls_termination` are involved;
+- with `--tls-cert` a ClientHello cannot be read as a payload match, so the
+  same ACL and `use_backend` move to the TLS-terminating frontend
+  (`geyser_tls_termination`), ahead of `default_backend geyser_signaling`,
+  and are dropped from `mc_shared`; the frontend is `mode tcp`, there is no
+  `mode http` and no new frontend;
+- the frontend location of the rule is therefore the one variable: shared
+  frontend without `--tls-cert`, terminating frontend with it. The backend,
+  the ACL text and the prefix contract are unchanged;
 - `MUX_PACKS_PREFIX` (default `/packs/`) must be one literal path segment:
   leading and trailing `/`, only `A-Za-z0-9._~/-`, no `//`, no `..`, and not
   `/` alone;

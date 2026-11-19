@@ -1370,16 +1370,20 @@ operator diagnostic. It cannot say whether Geyser accepts the header or which
 ICE path a real client picked; those still need a Bedrock client and the
 Geyser log lines above.
 
-#### 10.1.3 Resource packs on the shared port (opt-in, plaintext)
+#### 10.1.3 Resource packs on the shared port (opt-in, plaintext or TLS)
 
 `--packs HOST:PORT` adds one more destination to the shared port: a
 connection whose first bytes are `GET <prefix>` is handed to that local HTTP
 server instead of Geyser, so clients fetch
-`http://<public-ip>:<port>/packs/<file>` from the entry they already know.
-The branch is plaintext from the client's first byte, which is why it needs
-no certificate, no bound name and no TLS work: the request already has the
-form the mux can read. The ACL sits ahead of the Geyser line because the
-same `GET` also matches `is_http`.
+`<public-ip>:<port>/packs/<file>` from the entry they already know. Without
+`--tls-cert` the branch is plaintext from the client's first byte, which is
+why it needs no certificate, no bound name and no TLS work: the request
+already has the form the mux can read. The ACL sits ahead of the Geyser line
+because the same `GET` also matches `is_http`. With `--tls-cert` the route
+cannot be read at all from the first byte - that is a ClientHello - so the
+same ACL and backend ride the TLS-terminating frontend
+(`geyser_tls_termination`) ahead of `default_backend geyser_signaling`,
+deciding the decrypted request line there instead.
 
 The match is exactly `payload(0,<len>) -m beg "GET <prefix>"`, where
 `<len>` is the length of `GET ` plus the prefix: offset 0 of a fresh
@@ -1413,13 +1417,16 @@ unchanged; without the mapping the backend would look for
 `server/packs/packs/<file>`. Point PackManagerPro at the public address:
 
 ```yaml
-pack-url: http://<public-ip>:<port>/packs/pack-a.zip
+pack-url: https://<public-ip>:<port>/packs/pack-a.zip
 ```
 
-The pack travels in clear text; Minecraft verifies it against the SHA-1 in
-the pack metadata, so a modified file is rejected by the client. A client
-made to speak HTTPS sends a ClientHello instead, takes the existing TLS
-branch, and never reaches this ACL.
+The production form uses `--tls-cert` and `https://`: the frp entry serves
+no plaintext http, so a pack URL that a remote client follows across the
+network must be TLS. The backend is still plain loopback - HAProxy
+terminates the certificate - and Minecraft verifies the pack against the
+SHA-1 in the pack metadata, so a modified file is rejected by the client.
+Without `--tls-cert` the route is plaintext and the form is `http://`, for
+hosts whose entry allows it.
 
 The scene refuses both forms with a malformed endpoint, a port already used
 by `--listen`, `--java`, `--bedrock`, `--tls-listen` or `MUX_LAN_JAVA`, a

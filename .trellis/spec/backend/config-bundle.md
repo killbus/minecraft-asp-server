@@ -65,7 +65,7 @@ Settings shape, also optional:
 {
   "schema_version": 1,
   "values": {
-    "PACK_URL": "http://<public>:<port>/packs/pack-a.zip",
+    "PACK_URL": "https://<public>:<port>/packs/pack-a.zip",
     "GEYSER_ADVERTISE_ADDRESS": "<public>:34003",
     "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
   }
@@ -174,6 +174,11 @@ difference, `2` = refused, nothing written. Errors go to stderr as
   `join-destination: world` sends players to a missing destination.
 - Bad: giving `PACK_URL` a default so the tool "just works". The default
   would point every host at one host's address.
+- Bad: a public `http://` pack URL. The frp entry serves no plaintext http,
+  so a non-loopback `PACK_URL` must be `https://`; loopback
+  (`127.0.0.1`/`localhost`/`::1`) stays the local-only default. `resolve()`
+  enforces this after the placeholder check, so a value that still holds a
+  `${...}` is refused for the more fundamental reason first.
 - Bad: putting a credential literal in `settings/<host>.json`. The file is
   copied with the world into every snapshot, so the credential leaks there.
 - Bad: committing the production `settings/<host>.json`. Coordinates are host

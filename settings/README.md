@@ -22,7 +22,7 @@ Shape:
 {
   "schema_version": 1,
   "values": {
-    "PACK_URL": "http://<public>:<port>/packs/pack-a.zip",
+    "PACK_URL": "https://<public>:<port>/packs/pack-a.zip",
     "GEYSER_ADVERTISE_ADDRESS": "<public>:34003",
     "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
   }
@@ -54,3 +54,7 @@ Rules:
 They are declared here rather than parsed out of the frpc scene, because the
 config bundle must not depend on the network layer. When the entry changes,
 update this file and the scene in the same change.
+
+`PACK_URL` must be `https://` — the frp entry serves no plaintext http. The
+one exception is loopback (`http://127.0.0.1`, `localhost`, `::1`), which
+never crosses the entry and stays the template's local-only default.

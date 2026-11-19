@@ -205,18 +205,50 @@ def read_settings(path):
     return resolved
 
 
+
+# The frp entry point serves no plaintext http: a pack URL that a client follows
+# across the network must be https://. Loopback (127.0.0.1 / localhost / ::1)
+# never crosses the entry point, so it stays allowed as the local default.
+PACK_URL_RULE = (
+    r"^(?:"
+    r"https://\S+"
+    r"|"
+    r"http://(?:127\.0\.0\.1|localhost|\[?::1\]?)(?::\d+)?(?:/\S*)?"
+    r")$"
+)
+
+VALUE_RULES = {
+    "PACK_URL": (
+        PACK_URL_RULE,
+        "must be https:// (the frp entry point serves no plaintext http); "
+        "loopback (127.0.0.1/localhost/::1) stays allowed as the local default",
+    ),
+}
+
+
 def resolve(name, values, default, settings):
     if name in values:
-        return values[name]
-    if name in settings:
-        return settings[name]
-    if name in os.environ:
-        return os.environ[name]
-    if default is not None:
-        return default
-    raise VerificationError(
-        f"no value for ${{{name}}}; pass --set {name}=VALUE or export {name}"
-    )
+        value = values[name]
+    elif name in settings:
+        value = settings[name]
+    elif name in os.environ:
+        value = os.environ[name]
+    elif default is not None:
+        value = default
+    else:
+        value = None
+    if value is None:
+        raise VerificationError(
+            f"no value for ${{{name}}}; pass --set {name}=VALUE or export {name}"
+        )
+    if "${" in value:
+        raise VerificationError(
+            f"value for {name} still contains a placeholder: {value!r}"
+        )
+    rule = VALUE_RULES.get(name)
+    if rule is not None and not re.match(rule[0], value):
+        raise VerificationError(f"value for {name} {rule[1]}: {value!r}")
+    return value
 
 
 def render(payload, relative, specs, values, settings):
@@ -227,10 +259,6 @@ def render(payload, relative, specs, values, settings):
                 f"{relative} uses ${{{name}}}, which the manifest does not declare"
             )
         value = resolve(name, values, specs[name], settings)
-        if "${" in value:
-            raise VerificationError(
-                f"value for {name} still contains a placeholder: {value!r}"
-            )
         return value
 
     try:

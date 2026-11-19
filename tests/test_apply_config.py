@@ -101,11 +101,11 @@ class ApplyConfigTests(unittest.TestCase):
     def test_render_writes_the_rendered_bytes(self):
         self.add("server.properties", b"motd=Hi\nurl=${PACK_URL}\n", [{"name": "PACK_URL"}])
         self.save()
-        code, output, errors = self.run_tool("--set", "PACK_URL=http://host/packs/a.zip")
+        code, output, errors = self.run_tool("--set", "PACK_URL=https://host/packs/a.zip")
         self.assertEqual(0, code, errors)
         self.assertIn("CREATE", output)
         self.assertEqual(
-            b"motd=Hi\nurl=http://host/packs/a.zip\n",
+            b"motd=Hi\nurl=https://host/packs/a.zip\n",
             (self.server / "server.properties").read_bytes(),
         )
 
@@ -130,17 +130,20 @@ class ApplyConfigTests(unittest.TestCase):
     def test_value_comes_from_the_environment(self):
         self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
         self.save()
-        os.environ["PACK_URL"] = "http://env/packs/a.zip"
+        os.environ["PACK_URL"] = "https://env/packs/a.zip"
         code, _, errors = self.run_tool()
         self.assertEqual(0, code, errors)
-        self.assertIn(b"http://env/packs/a.zip", (self.server / "server.properties").read_bytes())
+        self.assertIn(
+            b"https://env/packs/a.zip",
+            (self.server / "server.properties").read_bytes(),
+        )
 
     def test_set_wins_over_the_environment(self):
         self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
         self.save()
-        os.environ["PACK_URL"] = "http://env/a.zip"
-        self.assertEqual(0, self.run_tool("--set", "PACK_URL=http://flag/a.zip")[0])
-        self.assertIn(b"http://flag/a.zip", (self.server / "server.properties").read_bytes())
+        os.environ["PACK_URL"] = "https://env/a.zip"
+        self.assertEqual(0, self.run_tool("--set", "PACK_URL=https://flag/a.zip")[0])
+        self.assertIn(b"https://flag/a.zip", (self.server / "server.properties").read_bytes())
 
     def test_missing_value_is_refused_before_any_write(self):
         self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
@@ -167,40 +170,40 @@ class ApplyConfigTests(unittest.TestCase):
     def test_settings_supply_the_values(self):
         self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
         self.save()
-        self.save_settings({"PACK_URL": "http://host/a.zip"})
+        self.save_settings({"PACK_URL": "https://host/a.zip"})
         code, output, errors = self.run_tool("--settings", str(self.settings_path))
         self.assertEqual(0, code, errors)
         self.assertIn("settings   ", output)
         self.assertIn(
-            b"url=http://host/a.zip",
+            b"url=https://host/a.zip",
             (self.server / "server.properties").read_bytes(),
         )
 
     def test_set_wins_over_settings(self):
         self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
         self.save()
-        self.save_settings({"PACK_URL": "http://host/a.zip"})
+        self.save_settings({"PACK_URL": "https://host/a.zip"})
         code, _, errors = self.run_tool(
             "--settings",
             str(self.settings_path),
             "--set",
-            "PACK_URL=http://flag/b.zip",
+            "PACK_URL=https://flag/b.zip",
         )
         self.assertEqual(0, code, errors)
         self.assertIn(
-            b"url=http://flag/b.zip",
+            b"url=https://flag/b.zip",
             (self.server / "server.properties").read_bytes(),
         )
 
     def test_settings_win_over_the_environment(self):
         self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
         self.save()
-        self.save_settings({"PACK_URL": "http://host/a.zip"})
-        os.environ["PACK_URL"] = "http://env/b.zip"
+        self.save_settings({"PACK_URL": "https://host/a.zip"})
+        os.environ["PACK_URL"] = "https://env/b.zip"
         code, _, errors = self.run_tool("--settings", str(self.settings_path))
         self.assertEqual(0, code, errors)
         self.assertIn(
-            b"url=http://host/a.zip",
+            b"url=https://host/a.zip",
             (self.server / "server.properties").read_bytes(),
         )
 
@@ -241,7 +244,7 @@ class ApplyConfigTests(unittest.TestCase):
     def test_settings_require_schema_version_one(self):
         self.add("server.properties", b"port=1\n")
         self.save()
-        self.save_settings({"PACK_URL": "http://host/a.zip"}, schema_version=2)
+        self.save_settings({"PACK_URL": "https://host/a.zip"}, schema_version=2)
         self.assert_refused("schema_version 1", "--settings", str(self.settings_path))
 
     def test_settings_file_that_is_absent_is_refused(self):
@@ -258,7 +261,7 @@ class ApplyConfigTests(unittest.TestCase):
             json.dumps(
                 {
                     "schema_version": 1,
-                    "value": {"PACK_URL": "http://host/a.zip"},
+                    "value": {"PACK_URL": "https://host/a.zip"},
                 }
             ),
             encoding="utf-8",
@@ -286,13 +289,33 @@ class ApplyConfigTests(unittest.TestCase):
             [{"name": "PACK_URL"}],
         )
         self.save()
-        self.assert_refused("${PORT}", "--set", "PACK_URL=http://a/b.zip")
+        self.assert_refused("${PORT}", "--set", "PACK_URL=https://a/b.zip")
 
     def test_value_that_still_holds_a_placeholder_is_refused(self):
         self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
         self.save()
         self.assert_refused(
             "still contains a placeholder", "--set", "PACK_URL=${HOST}/p.zip"
+        )
+
+    def test_public_http_pack_url_is_refused(self):
+        self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        errors = self.assert_refused(
+            "must be https", "--set", "PACK_URL=http://host/packs/a.zip"
+        )
+        self.assertFalse((self.server / "server.properties").exists())
+
+    def test_loopback_http_pack_url_is_accepted(self):
+        self.add("server.properties", b"url=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        code, _, errors = self.run_tool(
+            "--set", "PACK_URL=http://127.0.0.1:8000/packs/pack-a.zip"
+        )
+        self.assertEqual(0, code, errors)
+        self.assertIn(
+            b"url=http://127.0.0.1:8000/packs/pack-a.zip",
+            (self.server / "server.properties").read_bytes(),
         )
 
     def test_instance_class_is_refused(self):
@@ -382,10 +405,10 @@ class ApplyConfigTests(unittest.TestCase):
             [{"name": "PACK_URL"}],
         )
         self.save()
-        code, _, errors = self.run_tool("--set", "PACK_URL=http://a/b.zip")
+        code, _, errors = self.run_tool("--set", "PACK_URL=https://a/b.zip")
         self.assertEqual(0, code, errors)
         payload = (self.server / "server.properties").read_bytes()
-        self.assertEqual(b"motd=Hi\r\nurl=http://a/b.zip\r\n", payload)
+        self.assertEqual(b"motd=Hi\r\nurl=https://a/b.zip\r\n", payload)
 
     def test_duplicate_manifest_key_is_refused(self):
         self.lock_path.write_text('{"files": [], "files": []}', encoding="utf-8")
@@ -421,14 +444,14 @@ class ApplyConfigTests(unittest.TestCase):
         self.add("plugins/GrimAC/config.yml", b"alerts:\n  print-to-console: true\n")
         self.save()
         (expected / "server.properties").write_bytes(
-            b"motd=Fixture\r\nurl=http://host/packs/a.zip\r\nsecret=s3cret\r\n"
+            b"motd=Fixture\r\nurl=https://host/packs/a.zip\r\nsecret=s3cret\r\n"
         )
         (expected / "plugins/GrimAC/config.yml").write_bytes(
             b"alerts:\n  print-to-console: true\n"
         )
         code, output, errors = self.run_tool(
             "--set",
-            "PACK_URL=http://host/packs/a.zip",
+            "PACK_URL=https://host/packs/a.zip",
             "--set",
             "SECRET=s3cret",
         )

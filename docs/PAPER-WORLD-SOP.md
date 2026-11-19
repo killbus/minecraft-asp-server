@@ -257,13 +257,17 @@ address:
 ```yaml
 per-world-application:
   trials:
-    pack-url: http://<public-ip>:<port>/packs/pack-a.zip
+    pack-url: https://<public-ip>:<port>/packs/pack-a.zip
 ```
 
-Use the same host and port Java players use, and plain `http://`: the route
-matches a `GET /packs/` at offset 0, so it needs no certificate or host name,
-while an https URL becomes a ClientHello and goes to Geyser. Verify with the
-HTTP access log after `/mvtp trials`.
+Use the same host and port Java players use. With `--tls-cert` — the
+production form, because the frp entry serves no plaintext http — the route
+rides the TLS-terminating frontend, so the public form is
+`https://<public-ip>:<port>/packs/pack-a.zip` and the client downloads it
+over TLS; the backend stays plain loopback because HAProxy terminates the
+certificate. Without `--tls-cert` the route is plaintext on the shared
+frontend and the form is `http://`. Verify with the HTTP access log after
+`/mvtp trials`.
 
 `server/packs/` is externally sourced and regenerable, so it is deliberately
 **not** part of the server snapshots. Record the variant instead:
