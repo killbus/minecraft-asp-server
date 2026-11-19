@@ -264,7 +264,7 @@ class MuxLifetimeTests(unittest.TestCase):
             "frontend mc_shared\n"
             "    bind 127.0.0.1:25566\n"
             "\n"
-            "frontend geyser_tls_termination\n"
+            "frontend tls_terminated\n"
             "    bind 127.0.0.1:25567 ssl crt /outside/asp-frpcs/tls/one.pem"
             " crt /outside/asp-frpcs/tls/two.pem strict-sni\n"
             "    default_backend geyser_signaling\n",

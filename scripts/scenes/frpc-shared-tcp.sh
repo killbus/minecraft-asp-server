@@ -107,8 +107,9 @@
 #  --tls-cert may be given more than once: every file becomes one `crt`
 #  on that bind and HAProxy picks between them by SNI, which is what
 #  serving several names - several accounts, each with its own
-#  provider-issued certificate - on one port needs. A name no
-#  certificate covers falls back to the first one, unless
+#  provider-issued certificate - on one port needs. The first `crt` is
+#  the default certificate, so pass the name you advertise first; a
+#  handshake with no covered SNI is answered with it, unless
 #  --strict-sni makes such a handshake fail. Java carries no SNI, so
 #  none of this changes how Java traffic is routed.
 #
@@ -432,6 +433,12 @@ print_haproxy_config() {
     _ph_lan_java=$8
     _ph_packs_endpoint=${9:-}
     _ph_packs_prefix=${10:-}
+    # One spelling of "this connection starts with an HTTP request line".
+    # Both frontends that can see a request line read this value: the shared
+    # port (plaintext) and the terminated port (after TLS). Two copies drift,
+    # and the drift is silent - a method missing from one list falls through
+    # to Geyser instead of the pack backend.
+    _ph_http_methods='payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "'
     if [ -n "$_ph_packs_endpoint" ]; then
         _ph_packs_match="GET $_ph_packs_prefix"
         _ph_packs_len=${#_ph_packs_match}
@@ -476,7 +483,7 @@ defaults
 frontend mc_shared
     bind $_ph_listen$_ph_accept_proxy
     acl is_tls req.ssl_hello_type 1
-    acl is_http payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "
+    acl is_http $_ph_http_methods
     acl is_java payload(0,1) -m bin fe
     acl is_java payload(1,1) -m bin 00
 EOF
@@ -496,7 +503,7 @@ EOF
     fi
     if [ -n "$_ph_tls_certs" ]; then
         cat <<EOF
-    use_backend geyser_tls if is_tls
+    use_backend tls_termination if is_tls
     use_backend geyser_signaling if is_http
 EOF
     else
@@ -527,17 +534,20 @@ EOF
         cat <<EOF
 
 # TLS is terminated here, not in Geyser: the decrypted stream reaches the
-# same signalling backend byte for byte.
-backend geyser_tls
+# same signalling backend byte for byte. The two names below describe the
+# stage, not an owner - this half serves Java signalling and the pack route
+# alike.
+backend tls_termination
     server termination $_ph_tls_listen
 
-frontend geyser_tls_termination
+frontend tls_terminated
 EOF
         if [ "$_ph_cert_names" -gt 1 ]; then
             cat <<EOF
     # $_ph_cert_names names on one bind: HAProxy chooses the certificate by
-    # SNI. A ClientHello no certificate covers is served the first one,
-    # unless strict-sni is set.
+    # SNI. A ClientHello that carries no covered name is answered with the
+    # first `crt` on the bind, unless strict-sni is set - so put the name you
+    # advertise first.
 EOF
         fi
         cat <<EOF
@@ -545,8 +555,10 @@ EOF
 EOF
         if [ -n "$_ph_packs_endpoint" ]; then
             cat <<EOF
-    acl is_http payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "
+    acl is_http $_ph_http_methods
     acl is_packs payload(0,$_ph_packs_len) -m beg "$_ph_packs_match"
+    # Wait for the decrypted request line before switching: dropping this
+    # pair makes is_packs false forever and sends every pack GET to Geyser.
     tcp-request inspect-delay 3s
     tcp-request content accept if is_http
     use_backend packs if is_packs

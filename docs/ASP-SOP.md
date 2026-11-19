@@ -1394,7 +1394,7 @@ already has the form the mux can read. The ACL sits ahead of the Geyser line
 because the same `GET` also matches `is_http`. With `--tls-cert` the route
 cannot be read at all from the first byte - that is a ClientHello - so the
 same ACL and backend ride the TLS-terminating frontend
-(`geyser_tls_termination`) ahead of `default_backend geyser_signaling`,
+(`tls_terminated`) ahead of `default_backend geyser_signaling`,
 deciding the decrypted request line there instead. That frontend repeats
 the content-wait pair with an `is_http` ACL of its own:
 `tcp-request inspect-delay 3s` and

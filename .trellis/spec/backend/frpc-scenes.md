@@ -123,7 +123,7 @@ contract:
   reads the bytes for the ACL and forwards the connection unchanged;
 - with `--tls-cert` a ClientHello cannot be read as a payload match, so the
   same ACL and `use_backend` move to the TLS-terminating frontend
-  (`geyser_tls_termination`), ahead of `default_backend geyser_signaling`,
+  (`tls_terminated`), ahead of `default_backend geyser_signaling`,
   and are dropped from `mc_shared`; the frontend is `mode tcp`, there is no
   `mode http` and no new frontend. That frontend keeps the content-wait pair
   (`tcp-request inspect-delay 3s` +
@@ -136,6 +136,10 @@ contract:
 - the frontend location of the rule is therefore the one variable: shared
   frontend without `--tls-cert`, terminating frontend with it. The backend,
   the ACL text and the prefix contract are unchanged;
+- the `is_http` method list exists once in the generator
+  (`_ph_http_methods`) and is referenced by both frontends that can see a
+  request line; a second copy drifts silently, because a method missing from
+  one list falls through to Geyser instead of the pack backend;
 - `MUX_PACKS_PREFIX` (default `/packs/`) must be one literal path segment:
   leading and trailing `/`, only `A-Za-z0-9._~/-`, no `//`, no `..`, and not
   `/` alone;

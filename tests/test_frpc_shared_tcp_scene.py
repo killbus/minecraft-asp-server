@@ -145,7 +145,7 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertIn(MUX_BEDROCK, config)
         self.assertIn(MUX_JAVA, config)
         self.assertIn("    default_backend java", config)
-        self.assertNotIn("geyser_tls", "\n".join(config))
+        self.assertNotIn("tls_terminat", "\n".join(config))
 
     def test_a_scene_and_configs_are_mutually_exclusive(self):
         scene = self.manifest(
@@ -263,7 +263,7 @@ class SharedTcpSceneTests(unittest.TestCase):
         # loopback) and the signalling split is unchanged.
         self.assertIn("    bind 127.0.0.1:25566 accept-proxy", config)
         self.assertIn(MUX_JAVA_PROXY, config)
-        self.assertIn("    use_backend geyser_tls if is_tls", config)
+        self.assertIn("    use_backend tls_termination if is_tls", config)
         self.assertIn("    use_backend geyser_signaling if is_http", config)
         listener = [line for line in config if line.startswith("    bind 127.0.0.1:25567 ssl crt ")]
         self.assertEqual(1, len(listener), config)
@@ -386,16 +386,16 @@ class SharedTcpSceneTests(unittest.TestCase):
         # A ClientHello cannot be read as a payload match, so with TLS the
         # route is not on the shared frontend; it is on the terminating one,
         # where the decrypted request line is what the ACL reads.
-        shared = config[: config.index("frontend geyser_tls_termination")]
+        shared = config[: config.index("frontend tls_terminated")]
         self.assertNotIn("is_packs", shared)
         self.assertNotIn("mode http", "\n".join(config))
         self.assertIn("    acl is_packs payload(0,11) -m beg \"GET /packs/\"", config)
-        self.assertIn("    use_backend geyser_tls if is_tls", config)
+        self.assertIn("    use_backend tls_termination if is_tls", config)
         self.assertIn("    use_backend geyser_signaling if is_http", config)
-        self.assertIn("backend geyser_tls", config)
+        self.assertIn("backend tls_termination", config)
         self.assertIn("    server termination 127.0.0.1:25567", config)
-        self.assertIn("frontend geyser_tls_termination", config)
-        termination = config[config.index("frontend geyser_tls_termination"):]
+        self.assertIn("frontend tls_terminated", config)
+        termination = config[config.index("frontend tls_terminated"):]
         # In tcp mode the switching rules run at the accept event, with an
         # empty payload buffer, unless tcp-request content accept delays them
         # until the decrypted request line has arrived. The shared frontend
@@ -517,7 +517,7 @@ class SharedTcpSceneTests(unittest.TestCase):
                 "    acl is_java payload(1,1) -m bin 00",
                 "    tcp-request inspect-delay 3s",
                 "    tcp-request content accept if is_tls or is_http or is_java",
-                "    use_backend geyser_tls if is_tls",
+                "    use_backend tls_termination if is_tls",
                 "    use_backend geyser_signaling if is_http",
                 "    default_backend java",
                 "",
@@ -528,11 +528,13 @@ class SharedTcpSceneTests(unittest.TestCase):
                 MUX_JAVA,
                 "",
                 "# TLS is terminated here, not in Geyser: the decrypted stream reaches the",
-                "# same signalling backend byte for byte.",
-                "backend geyser_tls",
+                "# same signalling backend byte for byte. The two names below describe the",
+                "# stage, not an owner - this half serves Java signalling and the pack route",
+                "# alike.",
+                "backend tls_termination",
                 "    server termination 127.0.0.1:25567",
                 "",
-                "frontend geyser_tls_termination",
+                "frontend tls_terminated",
                 "    bind 127.0.0.1:25567 ssl crt " + resolved,
                 "    default_backend geyser_signaling",
             ],
@@ -655,7 +657,7 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("CN=soon.example", result.stdout)
         self.assertIn("WARNING certificate expires within 14 days", result.stdout)
-        self.assertIn("frontend geyser_tls_termination", result.stdout)
+        self.assertIn("frontend tls_terminated", result.stdout)
 
     def test_healthy_certificate_has_no_expiry_warning(self):
         certificate = self.real_pem("healthy.pem", days=30, common_name="healthy.example")
@@ -884,15 +886,15 @@ class SharedTcpSceneTests(unittest.TestCase):
         certificate = self.pem("certs/site.pem")
         config = self.config("--tls-cert", certificate.as_posix())
         text = "\n".join(config)
-        self.assertIn("    use_backend geyser_tls if is_tls", config)
+        self.assertIn("    use_backend tls_termination if is_tls", config)
         self.assertIn("    use_backend geyser_signaling if is_http", config)
         self.assertIn("    default_backend java", config)
         # Plain HTTP keeps its direct route to Geyser; only the ClientHello
         # is handed to the terminating frontend.
         self.assertNotIn("geyser_signaling if is_tls", text)
-        self.assertIn("backend geyser_tls", config)
+        self.assertIn("backend tls_termination", config)
         self.assertIn("    server termination 127.0.0.1:25567", config)
-        self.assertIn("frontend geyser_tls_termination", config)
+        self.assertIn("frontend tls_terminated", config)
         self.assertIn(MUX_BEDROCK, config)
         self.assertIn(MUX_JAVA, config)
         listener = [line for line in config if line.startswith("    bind 127.0.0.1:25567 ssl crt ")]
