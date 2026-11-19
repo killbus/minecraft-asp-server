@@ -17,7 +17,7 @@
     {
       "path": "config/paper-global.yml",
       "class": "source",
-      "sha256": "2cf90216ce7c220b1eed41e4ab8b9482b2ea51e6f0ed8b2b86f97881e72297da",
+      "sha256": "2982e7a66e8c15a5fe8bb9ae87fcfb8f6ac0d59a17ec7dcf831c053f1b436e4b",
       "placeholders": []
     },
     {
@@ -69,7 +69,7 @@
     {
       "path": "plugins/Geyser-Spigot/config.yml",
       "class": "source",
-      "sha256": "e0b2bcbc2cd0e15526d819ce063188065c0fc8f9f8ebc212db7b35f8c84e938a",
+      "sha256": "f6403971168d3b029c6eff395f44391524d2cbe856ef461312f489567f9efddf",
       "placeholders": [
         {
           "name": "GEYSER_ADVERTISE_ADDRESS",

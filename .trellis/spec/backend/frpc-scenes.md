@@ -78,6 +78,13 @@ backend carries `send-proxy-v2`, so Paper still sees a PROXY v2 header. The
 frontend is emitted only for the generated configuration. A hand-written
 `--haproxy-config` owns the whole file and must add the frontend itself.
 
+The committed config bundle fixes the backend side of that pair: Paper's
+`proxies.proxy-protocol: true` and Geyser's
+`advanced.java.use-haproxy-protocol: true`. `send-proxy-v2` is therefore
+not optional in this deployment - a generated mux without
+`--proxy-protocol` hands Paper a headerless connection it now refuses.
+Changing one side means changing the bundle and the `up` line together.
+
 #### Certificate expiry observation
 
 `--tls-cert` is a consumed input, not something this scene provisions.

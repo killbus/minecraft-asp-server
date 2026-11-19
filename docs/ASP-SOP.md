@@ -463,12 +463,13 @@ Baseline `plugins/LoginTo/config.yml` on this server:
 - `settings.premium.enabled: false`, `settings.premium.auto-register: true`
   (Bedrock players only - see the fork notes above).
 - `settings.sessions.enabled: false`. Session reuse is keyed on the
-  recorded IP, and both frpc entries in section 10 arrive as `127.0.0.1`
-  while the mux relays without PROXY protocol (10.1, the default), so
-  sessions would log in every player after the first one. The opt-in
-  chain of 10.1.1 gives the backend the player's own address again, so
-  with it on that blocker is gone and turning sessions back on is a
-  separate decision rather than something this list rules out.
+  recorded IP. This was first set while the mux relayed without PROXY
+  protocol (10.1), when every player arrived as `127.0.0.1` and sessions
+  would log in every player after the first one. The committed bundle now
+  runs 10.1.1, so the backend sees real addresses and that blocker is
+  gone; the flag stays off as a historical default, and turning it back
+  on is a separate decision about whether per-IP session reuse is
+  wanted.
 - `settings.password.authentication-timeout: 0`, so a slow typist is not
   kicked while registering. `max-login-attempts` still applies.
 
@@ -478,9 +479,12 @@ Baseline `plugins/LoginTo/config.yml` on this server:
 - [ ] `Done (..s)` present, no ERROR-level log lines
 - [ ] All target plugins `Enabling`
 - [ ] Port 25565 listening (`netstat -ano | findstr 25565`)
-- [ ] Java client can join the configured entry: TCP `25565` directly only
-      while PROXY protocol is off; with `--proxy-protocol`, use the public
-      frpc entry or the default LAN Java frontend (10.1.1). A Bedrock
+- [ ] Java client can join the configured entry. This bundle runs with
+      PROXY protocol on, so `25565` is not a direct entry: use the public
+      frpc entry or the LAN Java frontend `25564` (10.1.1). A direct
+      `25565` connection needs the opposite bundle (both
+      `proxies.proxy-protocol` and `advanced.java.use-haproxy-protocol`
+      back to `false`) and no `--proxy-protocol` on the scene. A Bedrock
       client joins the NetherNet entry point, not the UDP port: the
       `*.wdn.gg:443` address from the `Registered with the external signaling
       service. Players can join at ...` line, or the built-in signalling TCP
@@ -1074,11 +1078,14 @@ the player is valid for the name the player typed, whichever side
 terminates TLS - Geyser (`bedrock.signaling.builtin.https.*`) without
 `--tls-cert`, HAProxy with it.
 
-Two deliberate limits. By default HAProxy relays without speaking PROXY
-protocol, so with no `--proxy-protocol` leave frpc's
-`transport.proxyProtocolVersion` unset and do not configure the backends
-to expect it. And it shares TCP only; the WebRTC media plane is UDP and
-still needs its own frpc proxy.
+Two deliberate limits. The scene can relay without speaking PROXY
+protocol, and that mode is only usable with a bundle whose backends do not
+expect a header: with no `--proxy-protocol` leave frpc's
+`transport.proxyProtocolVersion` unset and keep
+`proxies.proxy-protocol` / `advanced.java.use-haproxy-protocol` at
+`false`. The committed bundle runs the opposite way, so its `up` line
+always passes `--proxy-protocol`. And it shares TCP only; the WebRTC media
+plane is UDP and still needs its own frpc proxy.
 
 `--dry-run` prints the HAProxy configuration and the tmux commands
 without starting tmux, frpc or HAProxy. `--listen`, `--java` and
@@ -1218,13 +1225,18 @@ the scene holds the listen port, and its judgement is covered by
 `tests/test_plain_website_check.py`, which runs the whole check against a
 stand-in proxy and a stand-in tunnel instead of haproxy and frpc.
 
-#### 10.1.1 Real client addresses (opt-in PROXY protocol v2)
+#### 10.1.1 Real client addresses (PROXY protocol v2)
 
-Java players reach Paper as `127.0.0.1`, so every offline account shares
-one IP: sessions, bans and LoginTo's recorded address cannot tell two
-players apart, and the login line prints the loopback address. That
-suits this deployment until something needs the real address, and then
-it is a four-part switch. `--proxy-protocol` makes the generated
+Without PROXY protocol, Java players reach Paper as `127.0.0.1`, so every
+offline account shares one IP: sessions, bans and LoginTo's recorded
+address cannot tell two players apart, and the login line prints the
+loopback address. The committed bundle in this repository therefore runs
+with PROXY protocol **on**: `proxies.proxy-protocol: true` in
+`config/paper-global.yml` and `advanced.java.use-haproxy-protocol: true`
+in `config/plugins/Geyser-Spigot/config.yml`. Those two are the bundle's
+initial values, not a per-host choice, so the `up` line must always carry
+`--proxy-protocol` - a mux that sends no header against these templates
+refuses every Java connection. `--proxy-protocol` makes the generated
 configuration accept a PROXY protocol v2 header on the shared port
 (`bind ... accept-proxy`) and give the Java backend one of its own
 (`server paper ... send-proxy-v2`, the IP frpc named). Every other

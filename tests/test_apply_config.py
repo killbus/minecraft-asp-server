@@ -560,6 +560,19 @@ class RepositoryConfigTests(unittest.TestCase):
                 return stripped[2:].strip().strip("\"'")
         self.skipTest(f"{key} is absent from the live {relative}")
 
+    def test_templates_request_the_proxy_header_the_mux_sends(self):
+        # The scene's Java backend always carries send-proxy-v2. Paper and
+        # Geyser must accept that header, or every Java connection dies on
+        # the first bytes. Both sides move together, so pin them here.
+        paper = (self.repository / "config/config/paper-global.yml").read_text(
+            encoding="utf-8"
+        )
+        geyser = (
+            self.repository / "config/plugins/Geyser-Spigot/config.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("  proxy-protocol: true", paper)
+        self.assertIn("    use-haproxy-protocol: true", geyser)
+
     def run_tool(self, *args):
         output, errors = io.StringIO(), io.StringIO()
         with redirect_stdout(output), redirect_stderr(errors):
