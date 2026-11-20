@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  AdvancedSlimePaper 26.2 - start script (Windows)
+REM  Paper 26.2 - start script (Windows)
 REM  Starts the server in the sibling server/ directory.
 REM
 REM  Before launching, backs up the previous session's world. The
@@ -17,10 +17,44 @@ REM    scripts\start.cmd               foreground, in the current terminal
 REM    scripts\start.cmd -pause        extra: pause on exit (double-click use)
 REM  Requires: Java 25 (MC 26.1+ refuses older JDKs).
 REM ============================================================
-setlocal
-cd /d "%~dp0..\server"
+setlocal EnableExtensions DisableDelayedExpansion
+set "WORLD_NAME="
+set "PAUSE_ON_EXIT="
+:parse_args
+set "ARGUMENT=%~1"
+if defined ARGUMENT goto :parse_argument
+if "%1"=="" goto :args_done
+goto :usage
+:parse_argument
+if /i "%~1"=="-pause" (
+    set "PAUSE_ON_EXIT=1"
+    shift
+    goto :parse_args
+)
+if not "%~1"=="--world" goto :usage
+if defined WORLD_NAME goto :usage
+set "WORLD_NAME=%~2"
+powershell -NoProfile -Command "if ($env:WORLD_NAME -cmatch '\A[A-Za-z0-9_-]+\z') { exit 0 } else { exit 2 }"
+if errorlevel 1 goto :usage
+shift
+shift
+goto :parse_args
 
-set "JAVA=D:\Applications\Scoop\apps\temurin25-jdk\current\bin\java.exe"
+:usage
+echo [start] ERROR: usage: scripts\start.cmd [--world NAME] [-pause] 1>&2
+echo [start] NAME must use ASCII letters, digits, _ or -. 1>&2
+exit /b 2
+
+:args_done
+cd /d "%~dp0..\server" || exit /b 1
+set "WORLD_ARGS="
+if not defined WORLD_NAME goto :java_setup
+powershell -NoProfile -Command "$world=Join-Path (Get-Location) $env:WORLD_NAME; $level=Join-Path $world 'level.dat'; if (!(Test-Path -LiteralPath $level -PathType Leaf)) { exit 2 }; foreach ($path in @($world,$level)) { if ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 2 } }"
+if errorlevel 1 goto :invalid_world
+set "WORLD_ARGS=--world %WORLD_NAME%"
+
+:java_setup
+if not defined JAVA set "JAVA=D:\Applications\Scoop\apps\temurin25-jdk\current\bin\java.exe"
 
 if not exist "%JAVA%" (
     echo [start] ERROR: Java 25 not found at:
@@ -29,8 +63,8 @@ if not exist "%JAVA%" (
     exit /b 1
 )
 
-if not exist "asp-server.jar" (
-    echo [start] ERROR: asp-server.jar not found in %cd%
+if not exist "paper-server.jar" (
+    echo [start] ERROR: paper-server.jar not found in %cd%
     exit /b 1
 )
 
@@ -44,12 +78,14 @@ if not "%ASP_SKIP_BACKUP%"=="1" (
 
 REM -Xmx / -Xms: tune to your RAM. Bedrock+Java mixed load is heavier
 REM than Java-only. 4G heap is a sane default for a small SMP.
-REM Upstream Paper's version API describes Paper, not this ASP fork, so the
-REM async startup update check can only produce noise here.
-"%JAVA%" -Xms2G -Xmx4G -XX:+UseG1GC -Dpaper.disableStartupVersionCheck=true -jar asp-server.jar
+"%JAVA%" -Xms2G -Xmx4G -XX:+UseG1GC -Dpaper.disableStartupVersionCheck=true -jar paper-server.jar %WORLD_ARGS%
 set "EXITCODE=%errorlevel%"
 echo.
 echo [start] Server exited (code %EXITCODE%).
 
-if /i "%~1"=="-pause" pause
+if defined PAUSE_ON_EXIT pause
 endlocal & exit /b %EXITCODE%
+
+:invalid_world
+echo [start] ERROR: --world requires an existing native save at server\%WORLD_NAME%\level.dat ^(no links^) 1>&2
+exit /b 2

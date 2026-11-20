@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-#  AdvancedSlimePaper 26.2 - start script (Linux / macOS shell)
+#  Paper 26.2 - start script (Linux / macOS shell)
 #  Starts the server in the sibling server/ directory.
 #
 #  Before launching, backs up the previous session's world. The server
@@ -21,7 +21,33 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORLD_NAME=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --world)
+            if [ "$#" -lt 2 ] || [ -n "$WORLD_NAME" ] || ! [[ "$2" =~ ^[A-Za-z0-9_-]+$ ]]; then
+                echo "[start] ERROR: --world requires one directory name using ASCII letters, digits, _ or -" >&2
+                exit 2
+            fi
+            WORLD_NAME="$2"
+            shift 2
+            ;;
+        *)
+            echo "[start] ERROR: usage: scripts/start.sh [--world NAME]" >&2
+            exit 2
+            ;;
+    esac
+done
 cd "$SCRIPT_DIR/../server"
+
+WORLD_ARGS=()
+if [ -n "$WORLD_NAME" ]; then
+    if [ ! -f "$WORLD_NAME/level.dat" ] || [ -L "$WORLD_NAME" ] || [ -L "$WORLD_NAME/level.dat" ]; then
+        echo "[start] ERROR: --world requires an existing native save at server/$WORLD_NAME/level.dat (no links)" >&2
+        exit 2
+    fi
+    WORLD_ARGS=(--world "$WORLD_NAME")
+fi
 
 # JAVA may point at a full java binary; otherwise fall back to PATH.
 JAVA="${JAVA:-java}"
@@ -38,8 +64,8 @@ if [ -z "$major" ] || [ "$major" -lt 25 ]; then
     exit 1
 fi
 
-if [ ! -f asp-server.jar ]; then
-    echo "[start] ERROR: asp-server.jar not found in $(pwd)" >&2
+if [ ! -f paper-server.jar ]; then
+    echo "[start] ERROR: paper-server.jar not found in $(pwd)" >&2
     exit 1
 fi
 
@@ -51,9 +77,6 @@ fi
 
 # -Xms / -Xmx: tune to available RAM. Bedrock+Java mixed load is
 # heavier than Java-only. 4G heap is a sane default for a small SMP.
-# Upstream Paper's version API describes Paper, not this ASP fork, so the
-# async startup update check can only produce noise here. The property is
-# read by MinecraftServer before it schedules that fetch.
 exec "$JAVA" -Xms2G -Xmx4G -XX:+UseG1GC \
     -Dpaper.disableStartupVersionCheck=true \
-    -jar asp-server.jar
+    -jar paper-server.jar "${WORLD_ARGS[@]}"

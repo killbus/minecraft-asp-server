@@ -23,14 +23,16 @@ SPEC.loader.exec_module(verifier)
 
 class RuntimeVerificationTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        scratch = SCRIPT.parents[1] / ".tmp"
+        scratch.mkdir(exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
         self.server = self.directory / "server"
         self.server.mkdir()
         self.lock_path = self.directory / "runtime.lock.json"
         self.lock = {"schema_version": 1, "datapack_directories": ["world/datapacks"], "artifacts": []}
-        self.install("server", "asp-server.jar", b"server content")
+        self.install("server", "paper-server.jar", b"server content")
         self.install("plugin", "plugins/example.jar", b"plugin content")
         self.install("datapack", "world/datapacks/example.zip", b"datapack content")
         self.save_lock()
@@ -255,9 +257,11 @@ class RuntimeVerificationTests(unittest.TestCase):
                 self.assert_error("installation scope")
 
     def test_exactly_one_canonical_server_artifact_is_required(self):
-        self.lock["artifacts"][0]["path"] = "other-server.jar"
-        self.save_lock()
-        self.assert_error("installation scope")
+        for path in ("other-server.jar", "asp-server.jar"):
+            with self.subTest(path=path):
+                self.lock["artifacts"][0]["path"] = path
+                self.save_lock()
+                self.assert_error("installation scope")
         self.lock["artifacts"].pop(0)
         self.save_lock()
         self.assert_error("exactly one server")
@@ -376,7 +380,7 @@ class RuntimeVerificationTests(unittest.TestCase):
 
         self.write("world/datapacks/unpacked/pack.mcmeta", b"{}")
         self.write("plugins/extra.jar")
-        self.write("asp-server.jar", b"modified")
+        self.write("paper-server.jar", b"modified")
         (self.server / "plugins/example.jar").unlink()
         before = snapshot()
         self.assertEqual(1, self.run_verifier()[0])

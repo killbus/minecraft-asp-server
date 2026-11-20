@@ -1,0 +1,15 @@
+{
+  "id": "single-world-start",
+  "name": "single-world-start",
+  "title": "Choose the primary world at server startup",
+  "status": "completed",
+  "priority": "P2",
+  "creator": "killbus",
+  "assignee": "killbus",
+  "createdAt": "2026-11-20",
+  "completedAt": "2026-11-20",
+  "branch": "feat/single-world-start",
+  "base_branch": "10c794e25981e8d5625dbcc9655b79db572d4b30",
+  "relatedFiles": ["scripts/start.sh", "scripts/start.cmd", "scripts/backup.sh", "scripts/backup.cmd", "scripts/backup-debug.cmd", "runtime.lock.json"],
+  "notes": "Implementation and independent review passed; see validation.md. Source-only work in the isolated worktree; no live runtime migration or push. Prior Multiverse phase preserved on archive/multiverse-2026-11-20 and freeze/multiverse-2026-11-20."
+}

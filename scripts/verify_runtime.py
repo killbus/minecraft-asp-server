@@ -112,7 +112,7 @@ def read_lock(path):
         kind = artifact["kind"]
         if kind == "server":
             server_count += 1
-            valid_scope = str(path) == "asp-server.jar"
+            valid_scope = str(path) == "paper-server.jar"
         elif kind == "plugin":
             valid_scope = str(path.parent) == "plugins" and path.suffix.lower() == ".jar"
         elif kind == "datapack":
@@ -122,7 +122,7 @@ def read_lock(path):
         if not valid_scope:
             raise VerificationError(f"{label}.path is outside the {kind} installation scope: {path}")
     if server_count != 1:
-        raise VerificationError("artifacts must declare exactly one server at asp-server.jar")
+        raise VerificationError("artifacts must declare exactly one server at paper-server.jar")
     return lock
 
 

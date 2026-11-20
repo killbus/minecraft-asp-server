@@ -1,12 +1,12 @@
 #!/bin/sh
 # ============================================================
-#  ASP server backup (POSIX sh, for Linux deployments)
+#  Paper server backup (POSIX sh, for Linux deployments)
 #
 #  Usage:  scripts/backup.sh [SERVER_DIR]
 #  Default SERVER_DIR: ../server (relative to this script)
 #
-#  Scope (see docs/ASP-SOP.md section 1 - not regenerable):
-#    world/ + whitelist/ban/usercache/ops json + server config
+#  Scope (see docs/SINGLE-WORLD-SOP.md):
+#    native saves + whitelist/ban/usercache/ops json + server config
 #    + config/ (Paper) + per-plugin config dirs (jars excluded)
 #    Known-regenerable plugin caches are excluded (see below).
 #  Output: <target>/<UTC timestamp>/ with MANIFEST.txt
@@ -95,8 +95,8 @@ cleanup() {
 trap cleanup EXIT
 
 # --- preflight ---
-if [ ! -f "$SERVER_DIR/asp-server.jar" ]; then
-    echo "[backup] ERROR: not a server dir: $SERVER_DIR (asp-server.jar missing)" >&2
+if [ ! -f "$SERVER_DIR/paper-server.jar" ]; then
+    echo "[backup] ERROR: not a server dir: $SERVER_DIR (paper-server.jar missing)" >&2
     exit 1
 fi
 
@@ -117,20 +117,20 @@ if [ -z "$TARGET_LIST" ]; then
     exit 1
 fi
 
-# Refuse a torn snapshot: the ASP server must be stopped while we copy.
-# Match the real launch shape (`java ... -jar .../asp-server.jar`) so an
+# Refuse a torn snapshot: the Paper server must be stopped while we copy.
+# Match the real launch shape (`java ... -jar .../paper-server.jar`) so an
 # unrelated process that merely mentions the file name is not a false hit.
 # pgrep is absent on some minimal shells (e.g. Git Bash), so fall back to ps.
 server_running() {
     if command -v pgrep >/dev/null 2>&1; then
-        pgrep -f -- '-jar[[:space:]]+.*asp-server\.jar' >/dev/null 2>&1
+        pgrep -f -- '-jar[[:space:]]+.*paper-server\.jar' >/dev/null 2>&1
     else
-        ps -ef 2>/dev/null | grep -E -- '-jar[[:space:]]+.*asp-server\.jar' >/dev/null 2>&1
+        ps -ef 2>/dev/null | grep -E -- '-jar[[:space:]]+.*[p]aper-server\.jar' >/dev/null 2>&1
     fi
 }
 if server_running; then
     if [ "${ALLOW_ONLINE:-0}" != "1" ]; then
-        echo "[backup] ERROR: the ASP server is running; stop it first (or set ALLOW_ONLINE=1)" >&2
+        echo "[backup] ERROR: the Paper server is running; stop it first (or set ALLOW_ONLINE=1)" >&2
         exit 1
     fi
     echo "[backup] WARN: ALLOW_ONLINE=1 - snapshot may be inconsistent" >&2
@@ -171,23 +171,18 @@ do_target() {
         return 1
     fi
 
-    # --- world: copy, runtime artifacts excluded ---
-    # world/ is a tree, not just level.dat: on this build level.dat is a
-    # slim header and the real state lives in data/ and dimensions/*/data/.
-    mkdir -p "$dest/world" || return 1
-    tar cf - --exclude=./session.lock --exclude=./level.dat_old -C "$SERVER_DIR/world" . | tar xf - -C "$dest/world"
-
-    # sh has no pipefail, so a failed `tar cf` on the left of the pipe would
-    # be invisible. Count files instead: COMPLETE must mean every source
-    # file is here.
-    src_count=$(find "$SERVER_DIR/world" -type f \
-        ! -path "$SERVER_DIR/world/session.lock" \
-        ! -path "$SERVER_DIR/world/level.dat_old" | wc -l)
-    dst_count=$(find "$dest/world" -type f | wc -l)
-    if [ "$src_count" -ne "$dst_count" ]; then
-        echo "[backup] ERROR: world copy incomplete ($dst_count of $src_count files): $dest" >&2
-        return 1
-    fi
+    for world_dir in "$SERVER_DIR"/*/; do
+        [ -f "$world_dir/level.dat" ] || continue
+        world_name="$(basename "$world_dir")"
+        mkdir -p "$dest/$world_name" || return 1
+        tar cf - --exclude=session.lock --exclude=level.dat_old -C "$world_dir" . | tar xf - -C "$dest/$world_name" || return 1
+        src_count=$(find "$world_dir" -type f ! -name session.lock ! -name level.dat_old | wc -l)
+        dst_count=$(find "$dest/$world_name" -type f | wc -l)
+        if [ "$src_count" -ne "$dst_count" ]; then
+            echo "[backup] ERROR: world copy incomplete: $world_name ($dst_count of $src_count files): $dest" >&2
+            return 1
+        fi
+    done
 
     # --- player files + server config ---
     for f in whitelist.json ops.json banned-ips.json banned-players.json usercache.json \
@@ -238,7 +233,7 @@ do_target() {
 
     # --- manifest: hash every backed-up file (world included) ---
     {
-        echo "# ASP backup $TS"
+        echo "# Paper backup $TS"
         (cd "$dest" && find . -type f ! -name MANIFEST.txt | LC_ALL=C sort | while IFS= read -r f; do sha256sum --text "$f"; done)
     } > "$dest/MANIFEST.txt" || {
         echo "[backup] ERROR: cannot write manifest: $dest" >&2

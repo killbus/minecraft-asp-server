@@ -1,5 +1,10 @@
 # AdvancedSlimePaper (ASP) Operations SOP
 
+> Historical ASP reference. This branch now uses plain Paper with explicit
+> primary-save selection; follow [Single-world Paper startup](SINGLE-WORLD-SOP.md)
+> for current startup, runtime verification and backup behavior. The ASP
+> installation and migration commands below do not apply to this branch.
+
 How to take an ASP server from scratch to production-ready.
 Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-14.
 

@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [frpc Scenes](./frpc-scenes.md) | Declarative optional frpc process composition | Active |
+| [Single-world Startup](./single-world-start.md) | Native primary-save selection and complete offline snapshots | Active |
 
 ---
 

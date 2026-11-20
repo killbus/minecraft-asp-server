@@ -1,28 +1,19 @@
 {
   "schema_version": 1,
-  "notes": "Initial observed inventory recorded on 2026-11-08. JAR hashes describe existing local files; their original downloads were not independently verified. Versions/builds come from embedded metadata and the recorded ASP boot log. Source URLs are project references unless a specific release is linked; download_url is omitted when the original fixed URL is unknown.",
+  "notes": "Paper 26.2 build 135 replaces ASP for native single-primary-save startup. Its fixed download URL and SHA-256 are verified. Other artifacts retain the 2026-11-08 observed inventory: original downloads were not independently verified unless noted. The datapack belongs to the default world only; selecting another save does not install it there.",
   "datapack_directories": [
     "world/datapacks"
   ],
   "artifacts": [
     {
-      "id": "advanced-slime-paper",
+      "id": "paper",
       "kind": "server",
-      "path": "asp-server.jar",
-      "version": "26.2.build.128-stable",
-      "build": "817eeca",
-      "source": "https://infernalsuite.com/download/asp/",
-      "sha256": "d36637dc8d8a678c27726e0b3824aa80d8785bad5c3742ce1ae55f4c5c6c4740"
-    },
-    {
-      "id": "asp-plugin",
-      "kind": "plugin",
-      "path": "plugins/asp-plugin-4.2.0-SNAPSHOT.jar",
-      "version": "4.2.0-SNAPSHOT",
-      "build": "817eeca984157b410f5d507b70d4e5949574769d",
-      "source": "https://infernalsuite.com/download/asp/",
-      "notes": "Version label from the installed filename; paper-plugin.yml reports the build commit as its version. Keep paired with the server build.",
-      "sha256": "ddc2fea51764378cba8aa58c09e84b6da3e049df9fac0991e960ba39ec59015d"
+      "path": "paper-server.jar",
+      "version": "26.2",
+      "build": "135",
+      "source": "https://papermc.io/downloads/paper",
+      "download_url": "https://fill-data.papermc.io/v1/objects/ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1/paper-26.2-135.jar",
+      "sha256": "ef3dbc68b013deafdbbee3bebf1ba351671ebcda94a8f136809b7532d5ba2fe1"
     },
     {
       "id": "coreprotect",
