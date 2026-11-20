@@ -107,6 +107,21 @@ from the path via `apply_config.classify`. A manifest edit cannot smuggle
 `ops.json`, `whitelist.json`, `banned-*.json`, `usercache.json` or `eula.txt`
 past it.
 
+For `plugins/Multiverse-Inventories/`, `groups.yml`, `playernames.json`, and
+the `worlds/`, `groups/`, `players/` trees are also instance state. Protect
+these before rendering even if a manifest falsely labels them as source.
+Group assignments are host topology; per-world/group profiles are gameplay
+state. A declarative MVI `config.yml` does not authorize replacing either.
+
+`WORLD_LIFECYCLE_MANAGED_WORLDS` is a required host setting with no manifest
+default. Its string value must parse as a JSON array of unique nonblank
+world names; normalization emits a JSON array, which is valid inline YAML
+for `managed-worlds`. Invalid values fail before writes. The example uses
+the explicit string `"[]"`; existing hosts supply their actual managed list.
+Never ship a literal empty list and tell operators to edit the applied file:
+the next apply would silently erase that edit. World names still require
+valid host Multiverse registration; the renderer does not create worlds.
+
 Apply contract:
 
 1. every manifest entry's packed template must hash to `sha256` (else exit 2)
@@ -160,9 +175,9 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 
 ### 5. Good / Base / Bad Cases
 
-- Good: `--check` on the live tree exits 0 with 28 `UNCHANGED` lines.
+- Good: `--check` on a matching live tree exits 0 with every declared file `UNCHANGED`.
 - Base: a fresh host copies `settings/<host>.example.json` to
-  `settings/<host>.json`, edits the coordinates, and gets 28 `CREATE` lines;
+  `settings/<host>.json`, edits the coordinates, and gets `CREATE` for every declared file;
   `PACK_URL` and `GEYSER_ADVERTISE_ADDRESS` come from that file, the credential
   from the environment.
 - Good: `--settings settings/minecraft-server.json` with
@@ -206,6 +221,12 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 - round-trip against a fixture `server/`, and against the live `server/` when present
 - backup snapshots `settings/*.json`, omits `*.example.json`, and lists the
   copied file in `MANIFEST.txt`
+- MVI group/profile paths refuse a forged source manifest; repeated applies
+  preserve their bytes, including case aliases on case-insensitive hosts
+- managed-world list rejects missing, malformed, duplicate and invalid-name
+  inputs before writes; accepted lists render as valid JSON/YAML
+- existing plugin-directory snapshots include MVI profiles/group assignments
+  and WorldLifecycle configuration while continuing to exclude plugin JARs
 
 ### 7. Wrong vs Correct
 

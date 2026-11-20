@@ -3,6 +3,7 @@
   "values": {
     "PACK_URL": "http://127.0.0.1:8000/packs/pack-a.zip",
     "GEYSER_ADVERTISE_ADDRESS": "frp-net.com:34003",
+    "WORLD_LIFECYCLE_MANAGED_WORLDS": "[]",
     "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
   }
 }

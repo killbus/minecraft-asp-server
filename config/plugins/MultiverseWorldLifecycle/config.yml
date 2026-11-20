@@ -1,0 +1,5 @@
+managed-worlds: ${WORLD_LIFECYCLE_MANAGED_WORLDS}
+idle-seconds: 60
+request-timeout-seconds: 30
+login-prepare-timeout-seconds: 30
+login-completion-timeout-seconds: 60

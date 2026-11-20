@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Observed inventory updated on 2026-11-17 for the standard Paper migration. Every artifact now carries a build-specific download_url whose bytes were hashed against the recorded SHA-256 on 2026-11-18. Source URLs remain project references; download_url is the installable artifact, and no 'latest' endpoint is used anywhere.",
+  "notes": "Pinned Paper runtime with Multiverse player-state, lifecycle and statistics presentation support. Download URLs identify verified build-specific artifacts; source URLs identify projects. Multiverse-WorldLifecycle and MultiverseStatisticsBoard are verified local builds without published releases, so installation uses the MANUAL contract described in docs/PAPER-WORLD-SOP.md. No 'latest' endpoint is used.",
   "datapack_directories": [
     "world/datapacks"
   ],
@@ -65,6 +65,44 @@
       "download_url": "https://cdn.modrinth.com/data/3wmN97b8/versions/YZ2Ji4IS/multiverse-core-5.8.1.jar",
       "notes": "World registration, on-demand load/unload, teleport, and per-world settings.",
       "sha256": "bc3f34e2d747fdf024f44868747bb016b08fa11d98ccb4ffcac958f083151a83"
+    },
+    {
+      "id": "multiverse-inventories",
+      "kind": "plugin",
+      "path": "plugins/Multiverse-Inventories-5.3.6.jar",
+      "version": "5.3.6",
+      "source": "https://modrinth.com/plugin/multiverse-inventories",
+      "download_url": "https://cdn.modrinth.com/data/qvdtDX3s/versions/86s1EwyC/multiverse-inventories-5.3.6.jar",
+      "notes": "Per-world/group player state, including optional last_location and game_statistics. Host group assignments and player profiles are not deployed from the config bundle.",
+      "sha256": "6e58e89009283f4be8658abe2b7e46c482010ceccf3c8e0b0e8ca6a0a114ff92"
+    },
+    {
+      "id": "multiverse-worldlifecycle",
+      "kind": "plugin",
+      "path": "plugins/Multiverse-WorldLifecycle-0.1.0.jar",
+      "version": "0.1.0",
+      "source": "https://github.com/killbus/Multiverse-WorldLifecycle",
+      "notes": "Verified local build; no release download is published. Supply the matching JAR manually. Coordinates world entry, saved-world login and idle unload; verified only on Paper 26.2-135 with Java 25, Multiverse-Core 5.8.1 and Multiverse-Inventories 5.3.6.",
+      "sha256": "2f362ee692b00078de108b4aeb5a2b580f1bfa36eead71b6e7f779bc7217d108"
+    },
+    {
+      "id": "multiverse-statistics-board",
+      "kind": "plugin",
+      "path": "plugins/MultiverseStatisticsBoard-0.1.0.jar",
+      "version": "0.1.0",
+      "source": "https://github.com/killbus/minecraft-asp-server",
+      "notes": "Independent online death leaderboard using MVI statistics scopes and PacketEvents 2.14.0. Source is the local extensions/world-statistics-board module; the project URL does not imply publication. Build with Java 25 and its Gradle wrapper, then supply the matching JAR manually. No statistics persistence or WorldLifecycle dependency.",
+      "sha256": "128c64cc02422d8b6ae2160a6253a02aa76a8b396ef562dffeb56b10a59a011d"
+    },
+    {
+      "id": "packetevents",
+      "kind": "plugin",
+      "path": "plugins/packetevents-spigot-2.14.0.jar",
+      "version": "2.14.0",
+      "source": "https://github.com/retrooper/packetevents",
+      "download_url": "https://github.com/retrooper/packetevents/releases/download/v2.14.0/packetevents-spigot-2.14.0.jar",
+      "notes": "Packet encoding and interception for the scoped statistics sidebar; verified release supports protocol 776 (26.2).",
+      "sha256": "060087c58ec268eae7dd0eb1f17ac3bea1eaadda1693414141ff64e506091bd7"
     },
     {
       "id": "packmanagerpro",

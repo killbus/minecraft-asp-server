@@ -45,6 +45,7 @@ class ApplyConfigTests(unittest.TestCase):
             "GEYSER_ADVERTISE_ADDRESS",
             "BSTATS_SERVER_UUID",
             "MANAGEMENT_SERVER_SECRET",
+            "WORLD_LIFECYCLE_MANAGED_WORLDS",
         ):
             os.environ.pop(name, None)
 
@@ -332,6 +333,102 @@ class ApplyConfigTests(unittest.TestCase):
         self.save()
         self.assert_refused("instance state")
 
+    def test_mvi_instance_files_cannot_be_smuggled_into_a_bundle(self):
+        for relative in (
+            "plugins/Multiverse-Inventories/groups.yml",
+            "plugins/Multiverse-Inventories/playernames.json",
+            "plugins/Multiverse-Inventories/worlds/adventure/player.json",
+            "plugins/Multiverse-Inventories/groups/shared/player.json",
+            "plugins/Multiverse-Inventories/players/player.json",
+        ):
+            with self.subTest(relative=relative):
+                self.files.clear()
+                self.add(relative, b"existing state\n")
+                self.save()
+                self.assert_refused("instance state")
+                self.assertFalse((self.server / relative).exists())
+
+    def test_managed_worlds_require_an_explicit_value_before_any_write(self):
+        self.add("server.properties", b"motd=Changed\n")
+        self.add(
+            "plugins/MultiverseWorldLifecycle/config.yml",
+            b"managed-worlds: ${WORLD_LIFECYCLE_MANAGED_WORLDS}\n",
+            [{"name": "WORLD_LIFECYCLE_MANAGED_WORLDS"}],
+        )
+        self.save()
+        self.assert_refused("no value for ${WORLD_LIFECYCLE_MANAGED_WORLDS}")
+        self.assertEqual([], list(self.server.rglob("*")))
+
+    def test_case_variant_mvi_manifest_paths_preserve_existing_state(self):
+        variants = (
+            ("groups.yml", "plugins/Multiverse-Inventories/GROUPS.YML"),
+            ("groups.yml", "plugins/multiverse-inventories/groups.yml"),
+            ("groups.yml", "Plugins/Multiverse-Inventories/groups.yml"),
+            ("playernames.json", "PLUGINS/MULTIVERSE-INVENTORIES/PLAYERNAMES.JSON"),
+            ("worlds/actor.json", "plugins/Multiverse-Inventories/WORLDS/actor.json"),
+            ("groups/shared/actor.json", "Plugins/multiverse-inventories/GROUPS/shared/actor.json"),
+            ("players/actor.json", "plugins/MULTIVERSE-INVENTORIES/PLAYERS/actor.json"),
+        )
+        for canonical, forged in variants:
+            with self.subTest(forged=forged):
+                existing = self.server / "plugins/Multiverse-Inventories" / canonical
+                existing.parent.mkdir(parents=True, exist_ok=True)
+                existing.write_bytes(b"preserve existing player state\n")
+                before = (existing.read_bytes(), existing.stat().st_mtime_ns)
+                self.files.clear()
+                self.add("server.properties", b"motd=must not apply\n")
+                self.add(forged, b"forged source replacement\n")
+                self.save()
+
+                self.assert_refused("instance state")
+
+                self.assertEqual(before, (existing.read_bytes(), existing.stat().st_mtime_ns))
+                self.assertFalse((self.server / "server.properties").exists())
+
+    def test_managed_worlds_validate_all_input_channels(self):
+        self.add(
+            "plugins/MultiverseWorldLifecycle/config.yml",
+            b"managed-worlds: ${WORLD_LIFECYCLE_MANAGED_WORLDS}\n",
+            [{"name": "WORLD_LIFECYCLE_MANAGED_WORLDS"}],
+        )
+        self.save()
+        name = "WORLD_LIFECYCLE_MANAGED_WORLDS"
+        for value in (
+            "adventure", "{}", "null", '["adventure", "adventure"]',
+            '[""]', '[" adventure"]', '[3]', '[{}]', '["bad\\nname"]', '["bad\\u007fname"]',
+        ):
+            for channel in ("settings", "environment", "set"):
+                with self.subTest(value=value, channel=channel):
+                    arguments = []
+                    if channel == "settings":
+                        self.save_settings({name: value})
+                        arguments = ["--settings", str(self.settings_path)]
+                    elif channel == "set":
+                        arguments = ["--set", f"{name}={value}"]
+                    with patch.dict(os.environ, {name: value} if channel == "environment" else {}):
+                        self.assert_refused("must be a JSON array", *arguments)
+                    self.assertEqual([], list(self.server.rglob("*")))
+
+    def test_managed_worlds_render_as_a_normalized_yaml_flow_list(self):
+        relative = "plugins/MultiverseWorldLifecycle/config.yml"
+        self.add(
+            relative,
+            b"managed-worlds: ${WORLD_LIFECYCLE_MANAGED_WORLDS}\n",
+            [{"name": "WORLD_LIFECYCLE_MANAGED_WORLDS"}],
+        )
+        self.save()
+        for worlds in ([], ["adventure", "minecraft:arena", 'quoted"world']):
+            with self.subTest(worlds=worlds):
+                self.save_settings({"WORLD_LIFECYCLE_MANAGED_WORLDS": json.dumps(worlds, indent=2)})
+                arguments = ["--settings", str(self.settings_path)]
+                code, _, errors = self.run_tool(*arguments)
+                self.assertEqual(0, code, errors)
+                self.assertEqual(
+                    f"managed-worlds: {json.dumps(worlds)}\n".encode(),
+                    (self.server / relative).read_bytes(),
+                )
+                self.assertEqual(0, self.run_tool("--check", *arguments)[0])
+
     def test_template_hash_drift_is_refused(self):
         self.add("server.properties", b"port=${PORT}\n", [{"name": "PORT"}])
         self.save()
@@ -474,6 +571,9 @@ class ClassificationTests(unittest.TestCase):
             "plugins/GrimAC/config.yml",
             "plugins/GrimAC/databases/mysql.yml",
             "plugins/Multiverse-Core/config.yml",
+            "plugins/Multiverse-Inventories/config.yml",
+            "plugins/MultiverseWorldLifecycle/config.yml",
+            "Plugins/multiverse-inventories/CONFIG.YML",
             "plugins/PackManagerPro/config.yml",
         )
         instance = (
@@ -486,6 +586,15 @@ class ClassificationTests(unittest.TestCase):
             "packs/pack-a.zip",
             "plugins/Multiverse-Core/worlds.yml",
             "plugins/Multiverse-Core/anchors.yml",
+            "plugins/Multiverse-Inventories/groups.yml",
+            "plugins/Multiverse-Inventories/playernames.json",
+            "plugins/Multiverse-Inventories/worlds/adventure/player.json",
+            "plugins/Multiverse-Inventories/groups/shared/player.json",
+            "plugins/Multiverse-Inventories/players/player.json",
+            "PLUGINS/MULTIVERSE-INVENTORIES/GROUPS.YML",
+            "Plugins/multiverse-inventories/WORLDS/actor.json",
+            "World/players/data/actor.dat",
+            "Plugins/CoreProtect/DATABASE.DB",
             "plugins/floodgate/key.pem",
             "plugins/CoreProtect/.license",
             "plugins/CoreProtect/database.db",
@@ -506,7 +615,7 @@ class ClassificationTests(unittest.TestCase):
 
 
 class RepositoryConfigTests(unittest.TestCase):
-    """The committed bundle must reproduce the live server byte for byte."""
+    """The committed bundle must render safely and reproduce an adopted server."""
 
     @classmethod
     def setUpClass(cls):
@@ -579,6 +688,60 @@ class RepositoryConfigTests(unittest.TestCase):
             code = apply_config.main(list(args))
         return code, output.getvalue(), errors.getvalue()
 
+    def test_committed_bundle_preserves_profiles_and_renders_lifecycle_policy(self):
+        with scratch.directory("repository-player-state-") as temporary:
+            server = temporary / "server"
+            preserved = {}
+            for relative in (
+                "plugins/Multiverse-Core/worlds.yml",
+                "plugins/Multiverse-Inventories/groups.yml",
+                "plugins/Multiverse-Inventories/playernames.json",
+                "plugins/Multiverse-Inventories/worlds/adventure/player.json",
+                "plugins/Multiverse-Inventories/groups/shared/player.json",
+                "plugins/Multiverse-Inventories/players/player.json",
+                "world/players/data/player.dat",
+            ):
+                path = server / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(f"host state: {relative}".encode())
+                preserved[path] = (path.read_bytes(), path.stat().st_mtime_ns)
+            settings = temporary / "settings.json"
+            settings.write_text(json.dumps({
+                "schema_version": 1,
+                "values": {
+                    "PACK_URL": "https://packs.example.test/packs/a.zip",
+                    "GEYSER_ADVERTISE_ADDRESS": "relay.example.test:34003",
+                    "WORLD_LIFECYCLE_MANAGED_WORLDS": '["adventure", "arena"]',
+                    "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET",
+                },
+            }), encoding="utf-8")
+            arguments = ["--server-dir", str(server), "--settings", str(settings)]
+            with patch.dict(os.environ, {"MANAGEMENT_SERVER_SECRET": "fixture-secret"}):
+                code, output, errors = self.run_tool(*arguments)
+                self.assertEqual(0, code, errors)
+                expected_count = len(apply_config.read_manifest(self.repository / "config.lock.json"))
+                self.assertEqual(expected_count, output.count("CREATE"))
+                code, output, errors = self.run_tool("--check", *arguments)
+                self.assertEqual(0, code, errors)
+                self.assertEqual(expected_count, output.count("UNCHANGED"))
+            for path, expected in preserved.items():
+                self.assertEqual(expected, (path.read_bytes(), path.stat().st_mtime_ns))
+            lifecycle = (server / "plugins/MultiverseWorldLifecycle/config.yml").read_text(encoding="utf-8")
+            self.assertIn('managed-worlds: ["adventure", "arena"]', lifecycle)
+            self.assertIn("login-prepare-timeout-seconds: 30", lifecycle)
+            self.assertIn("login-completion-timeout-seconds: 60", lifecycle)
+            multiverse = (server / "plugins/Multiverse-Core/config.yml").read_text(encoding="utf-8")
+            self.assertIn("enable-join-destination: false", multiverse)
+            inventories = (server / "plugins/Multiverse-Inventories/config.yml").read_text(encoding="utf-8")
+            for expected in (
+                "  - last_location", "  - game_statistics",
+                "default-ungrouped-worlds: false", "first-run: false",
+                "use-optionals-for-ungrouped-worlds: true",
+                "apply-last-location-for-all-teleports: false",
+                "apply-playerdata-on-join: false", "always-write-world-profile: true",
+            ):
+                self.assertIn(expected, inventories)
+
     @unittest.skipUnless(
         (Path(__file__).resolve().parents[1] / "server").is_dir(), "no live server tree"
     )
@@ -603,6 +766,10 @@ class RepositoryConfigTests(unittest.TestCase):
                                 "plugins/Geyser-Spigot/config.yml",
                                 "advertise-addresses",
                             ),
+                            "WORLD_LIFECYCLE_MANAGED_WORLDS": self.live_yaml(
+                                "plugins/MultiverseWorldLifecycle/config.yml",
+                                "managed-worlds",
+                            ),
                             "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET",
                         },
                     }
@@ -623,7 +790,10 @@ class RepositoryConfigTests(unittest.TestCase):
         self.assertEqual(0, code, errors)
         self.assertNotIn("CREATE", output)
         self.assertNotIn("UPDATE", output)
-        self.assertEqual(28, output.count("UNCHANGED"))
+        self.assertEqual(
+            len(apply_config.read_manifest(self.repository / "config.lock.json")),
+            output.count("UNCHANGED"),
+        )
 
 
 if __name__ == "__main__":

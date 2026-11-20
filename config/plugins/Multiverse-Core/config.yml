@@ -132,7 +132,7 @@ spawn:
   
   # Enables setting of a fixed location for players to spawn in when they join the server every time.
   # See `join-destination` option below as well.
-  enable-join-destination: true
+  enable-join-destination: false
   
   # Sets the destination that Multiverse will use to spawn players on every login.
   # Set the above enable-join-destination to false to disable

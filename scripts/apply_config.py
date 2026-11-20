@@ -73,7 +73,7 @@ INSTANCE_BASENAMES = (
 
 def classify(relative):
     """Return the class of a server-relative path: `source` or `instance`."""
-    parts = PurePosixPath(relative).parts
+    parts = tuple(component.casefold() for component in PurePosixPath(relative).parts)
     if not parts:
         return "instance"
     if f"{parts[0]}/" in INSTANCE_TOP_PREFIXES:
@@ -82,6 +82,11 @@ def classify(relative):
         if len(parts) < 3:
             return "instance"
         inside = "/".join(parts[2:])
+        if parts[1] == "multiverse-inventories" and (
+            inside in {"groups.yml", "playernames.json"}
+            or parts[2] in {"worlds", "groups", "players"}
+        ):
+            return "instance"
         for component in INSTANCE_PLUGIN_DIRS:
             if inside == component or inside.startswith(component):
                 return "instance"
@@ -248,6 +253,28 @@ def resolve(name, values, default, settings):
     rule = VALUE_RULES.get(name)
     if rule is not None and not re.match(rule[0], value):
         raise VerificationError(f"value for {name} {rule[1]}: {value!r}")
+    if name == "WORLD_LIFECYCLE_MANAGED_WORLDS":
+        try:
+            worlds = json.loads(value)
+        except ValueError as error:
+            raise VerificationError(
+                f"value for {name} must be a JSON array of unique world names"
+            ) from error
+        if (
+            not isinstance(worlds, list)
+            or any(
+                not isinstance(world, str)
+                or not world.strip()
+                or world != world.strip()
+                or not world.isprintable()
+                for world in worlds
+            )
+            or len(set(worlds)) != len(worlds)
+        ):
+            raise VerificationError(
+                f"value for {name} must be a JSON array of unique nonblank world names"
+            )
+        return json.dumps(worlds, ensure_ascii=True)
     return value
 
 

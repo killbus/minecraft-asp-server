@@ -140,7 +140,30 @@
     {
       "path": "plugins/Multiverse-Core/config.yml",
       "class": "source",
-      "sha256": "79cfa4ab70e1ee0aa7318a3aa9f230f8bc26583fa4da46997d00a29b8741b812",
+      "sha256": "a3cf00714516ee3f69d1e1a3e3fd5509833f059714c1fdcbfb325d4c44f83c49",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/Multiverse-Inventories/config.yml",
+      "class": "source",
+      "sha256": "423c56d9ed07ddde2ae2182ea7b3ffe24cb4955d2b27ef212f2bb67d0c40145d",
+      "placeholders": []
+    },
+    {
+      "path": "plugins/MultiverseWorldLifecycle/config.yml",
+      "class": "source",
+      "sha256": "8b28f083a4f6069cea6c23a1e474c96347fe16e2baf7c3184b7175ee4d73de03",
+      "placeholders": [
+        {
+          "name": "WORLD_LIFECYCLE_MANAGED_WORLDS",
+          "default": null
+        }
+      ]
+    },
+    {
+      "path": "plugins/MultiverseStatisticsBoard/config.yml",
+      "class": "source",
+      "sha256": "196e2426d2078414905f0740e3840a46370b6d146da7cd3702605c431e295a93",
       "placeholders": []
     },
     {

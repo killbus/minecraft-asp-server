@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/multiverse-player-state.md","reason":"Statistics and display acceptance remain independent"}
+{"file":".trellis/spec/backend/config-bundle.md","reason":"No deployment overwrite of instance data"}
+{"file":".trellis/spec/backend/runtime-inventory.md","reason":"Hash-pinned runtime and honest installation statuses"}
+{"file":".trellis/spec/backend/world-artifacts.md","reason":"Preserve immutable input and native scoreboard"}
+{"file":".trellis/spec/backend/statistics-sidebar.md","reason":"MVI scope, packet ownership, native restoration and concurrent wire validation"}

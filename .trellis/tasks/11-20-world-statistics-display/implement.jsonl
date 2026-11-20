@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/multiverse-player-state.md","reason":"MVI statistics ownership, adoption and scoreboard scope"}
+{"file":".trellis/spec/backend/config-bundle.md","reason":"Declarative config versus instance state"}
+{"file":".trellis/spec/backend/runtime-inventory.md","reason":"Pinned artifact installer and MANUAL contract"}
+{"file":".trellis/spec/backend/world-artifacts.md","reason":"Immutable maps and native scoreboard ownership"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse existing components and avoid parallel ownership"}

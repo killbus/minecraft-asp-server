@@ -78,3 +78,41 @@ class BackupSettingsTests(unittest.TestCase):
         snapshot = self.snapshot()
         self.assertTrue((snapshot / "COMPLETE").is_file())
         self.assertFalse((snapshot / "settings").exists())
+
+    def test_player_state_and_lifecycle_settings_are_in_the_snapshot(self):
+        state_paths = (
+            "plugins/Multiverse-Core/worlds.yml",
+            "plugins/Multiverse-Inventories/config.yml",
+            "plugins/Multiverse-Inventories/groups.yml",
+            "plugins/Multiverse-Inventories/playernames.json",
+            "plugins/Multiverse-Inventories/worlds/adventure/player.json",
+            "plugins/Multiverse-Inventories/groups/shared/player.json",
+            "plugins/Multiverse-Inventories/players/player.json",
+            "plugins/MultiverseWorldLifecycle/config.yml",
+            "world/players/data/player.dat",
+        )
+        for relative in state_paths:
+            path = self.server / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(f"host state: {relative}".encode())
+        jar = "plugins/Multiverse-WorldLifecycle-0.1.0.jar"
+        (self.server / jar).write_bytes(b"rebuildable binary")
+        production = self.settings / "minecraft-server.json"
+        production.write_text(
+            '{"schema_version":1,"values":{"WORLD_LIFECYCLE_MANAGED_WORLDS":"[\\"adventure\\"]"}}\n',
+            encoding="utf-8",
+        )
+
+        result = self.backup(self.settings)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        snapshot = self.snapshot()
+        self.assertTrue((snapshot / "COMPLETE").is_file())
+        manifest = (snapshot / "MANIFEST.txt").read_text(encoding="utf-8")
+        for relative in state_paths:
+            self.assertEqual((self.server / relative).read_bytes(), (snapshot / relative).read_bytes())
+            self.assertIn(f"./{relative}", manifest)
+        self.assertEqual(production.read_bytes(), (snapshot / "settings/minecraft-server.json").read_bytes())
+        self.assertIn("./settings/minecraft-server.json", manifest)
+        self.assertFalse((snapshot / jar).exists())
+        self.assertNotIn(jar, manifest)

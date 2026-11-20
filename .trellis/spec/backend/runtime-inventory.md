@@ -37,6 +37,12 @@ the declaration, never the binaries.
 - HTTP requests carry a descriptive User-Agent with the repository URL.
   PaperMC answers 403 to a generic or contact-less agent, and that failure
   looks like a broken URL otherwise.
+- An artifact without a published binary can deliberately omit
+  `download_url`. The installer reports `MANUAL` until the operator supplies
+  the exact locked file, then reports `OK`. The source URL is a project
+  reference, not an invented release endpoint. Build/transfer instructions
+  must identify the tested source and expected hash; do not silently adopt
+  different locally built bytes.
 - A present file that differs is `DRIFT` and is not replaced without
   `--replace`. A URL that serves different bytes is a failure, never a reason
   to rewrite the lock.

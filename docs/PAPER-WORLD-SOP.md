@@ -3,7 +3,9 @@
 How to run the server on standard Paper, keep the adventure map off the startup
 path, and switch worlds with Multiverse-Core.
 
-Target: Paper 26.2-135, Multiverse-Core 5.8.1, Java 25.
+Target: Paper 26.2-135, Multiverse-Core 5.8.1, Multiverse-Inventories 5.3.6,
+Multiverse-WorldLifecycle 0.1.0, Java 25. The lifecycle adapter is verified
+only on Minecraft 26.2; MVI's support for 26.3 does not extend that boundary.
 
 ## 0. Architecture
 
@@ -13,6 +15,8 @@ The active engine is standard Paper, not AdvancedSlimePaper:
 | --- | --- | --- |
 | Paper | 26.2-135 | `server/paper-server.jar` |
 | Multiverse-Core | 5.8.1 | `server/plugins/Multiverse-Core-5.8.1.jar` |
+| Multiverse-Inventories | 5.3.6 | `server/plugins/Multiverse-Inventories-5.3.6.jar` |
+| Multiverse-WorldLifecycle | 0.1.0 | `server/plugins/Multiverse-WorldLifecycle-0.1.0.jar` |
 | PackManagerPro | 2.0.0 | `server/plugins/PackManagerPro.jar` |
 
 Paper 26.x stores every registered world as a dimension under the primary level:
@@ -89,6 +93,21 @@ mv info trials              # inspect Multiverse settings
 
 `/mvtp` normally loads an unloaded registered world on demand. Use `/mv load`
 when preloading or validating the map from console.
+
+For explicit entry intent, WorldLifecycle adds `/wltp <world>` (resume),
+`/wltp <world> spawn`, and `/wltp <world> exact <x> <y> <z> [yaw pitch]`.
+It loads a registered world before resolving MVI's saved location. Explicit
+spawn/exact destinations are not rewritten to the last location. `/wl status`
+reports loaded/unloaded worlds and pending operations. `/mvtp` remains a
+Multiverse-Core command. World names are configuration inputs; these commands
+have no map-specific behavior.
+
+`worldlifecycle.enter` defaults to true, but Multiverse still checks access and
+destination permissions. For a chosen world, grant only the intended forms:
+`multiverse.access.<world>`, `multiverse.teleport.self.ll.<world>` (resume),
+`multiverse.teleport.self.w.<world>` (spawn), and
+`multiverse.teleport.self.e.<world>` (exact). Existing spawn-only permissions
+do not grant saved-location or exact-coordinate access.
 
 Set the map spawn from console:
 
@@ -378,6 +397,12 @@ like", and those files are exactly the ones it must not carry. Copying
 `apply_config.py` exists to remove; restoring a snapshot onto the host it
 came from is fine.
 
+This includes MVI's `groups.yml`, `playernames.json`, `worlds/`, `groups/`,
+and `players/`, plus WorldLifecycle's rendered configuration and the host
+settings that produced its managed-world list. Restore these alongside the
+native player saves from the same snapshot. No separate player-state backup
+mechanism is needed, and plugin JARs still come from the runtime inventory.
+
 Geyser and SkinsRestorer `cache/` directories are regenerable and excluded;
 do not widen that exclusion to other plugins without checking their state.
 Resource packs under `packs/` are excluded for the same reason; their
@@ -409,24 +434,33 @@ Correcting descriptive metadata is safe when `files`, `bytes`, and
 
 ## 7a. Login destination and unloaded worlds
 
-Paper resolves a returning player's saved dimension on login. If that
-dimension is not registered and loaded, the player can land in the default
-overworld at the saved coordinates, which may be ungenerated terrain. With
-`trials` set to `auto-load: false`, pin every login to the hub in
-`plugins/Multiverse-Core/config.yml`:
+Paper resolves a returning player's saved dimension on login.
+Multiverse-WorldLifecycle prepares that registered world before native login,
+then validates the saved world identity and coordinates. It preserves the
+save and refuses login if preparation fails. The deployed Multiverse-Core
+policy therefore disables the former fixed hub destination:
 
 ```yaml
 spawn:
-  enable-join-destination: true
+  enable-join-destination: false
   join-destination: world
 ```
 
-The current server config has these values, so a returning player logs in at
-the hub even if they logged out inside `trials`.
+The remaining `join-destination: world` value is inactive. MVI's
+`apply-playerdata-on-join: false` keeps native login authoritative; global
+last-location teleport rewriting also remains disabled. Install the verified
+lifecycle JAR before adopting this policy. If removing the lifecycle plugin
+while worlds can be unloaded, deliberately choose a fallback login policy
+before restarting.
 
-Change `join-destination` to `trials` to make the adventure map the login
-world instead. Either value is preferable to leaving it empty while an
-on-demand world is registered.
+Only worlds listed in `WORLD_LIFECYCLE_MANAGED_WORLDS` are considered for
+automatic idle unload, after 60 seconds without players or pending work.
+The default world is never unloaded. Entry and login can still load other
+registered worlds. Keep those selected for on-demand startup registered with
+Multiverse's `auto-load: false`; the configuration bundle does not overwrite
+the host's `worlds.yml`. The request/preparation/completion budgets are
+30/30/60 seconds. A synchronous Paper world load cannot be instantly
+interrupted when a deadline expires.
 
 There is no ASP rollback copy. The ASP engine and its Slime worlds are not
 on the deployment host, and `server/.rollback/` is not part of this
@@ -453,7 +487,8 @@ Source: `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`,
 `permissions.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`,
 and each plugin's declarative YAML/JSON.
 
-Instance: `world/`, `plugins/*/worlds.yml` and `anchors.yml`, `*.db`,
+Instance: `world/`, `plugins/*/worlds.yml` and `anchors.yml`, MVI's
+`groups.yml`, `playernames.json`, `worlds/`, `groups/`, and `players/`, `*.db`,
 `playerdata` and `players/`, `skins/`, caches, `logs/`, `nethernet/`,
 `key.pem`, `ops.json`, `whitelist.json`, `banned-*.json`, `usercache.json`,
 `eula.txt`, and `packs/`.
@@ -465,6 +500,8 @@ git pull
 # first deploy on this host only: create the untracked coordinates
 [ -f settings/minecraft-server.json ] || cp settings/minecraft-server.example.json settings/minecraft-server.json
 python -B scripts/apply_config.py --dry-run --settings settings/minecraft-server.json
+python -B scripts/install_runtime.py || exit 1
+# Resolve every MANUAL/DRIFT/FAIL before applying the new login policy.
 python -B scripts/apply_config.py --settings settings/minecraft-server.json
 python -B scripts/verify_runtime.py
 scripts/start.sh
@@ -488,15 +525,118 @@ It writes through a `.tmp.<pid>` sibling and `os.replace`, so an interrupted
 run leaves the old file in place. `--check` exits 1 if the host differs and
 writes nothing; `--dry-run` prints `CREATE`/`UPDATE`/`UNCHANGED`.
 
-Three placeholders have no default and must be supplied on every host:
+Four placeholders have no default and must be supplied on every host:
 `PACK_URL` is the address clients download the pack from,
 `GEYSER_ADVERTISE_ADDRESS` is the `host:port` NetherNet advertises to Bedrock
-clients, and `MANAGEMENT_SERVER_SECRET` is Paper's management credential.
+clients, `WORLD_LIFECYCLE_MANAGED_WORLDS` is a JSON-array string naming the
+host's idle-unload worlds, and `MANAGEMENT_SERVER_SECRET` is Paper's
+management credential. Add the managed list to existing host settings before
+applying; omission fails before writing. The example's explicit `"[]"`
+selects no automatic unload and does not silently replace an existing list.
 The other two (`FLOODGATE_METRICS_UUID`, `BSTATS_SERVER_UUID`) are
 plugin-generated identities whose only job is telemetry; each carries a
 default in the lock so a fresh host renders without inventing one, and an
 existing host is not churned. A default is allowed there and nowhere else -
 never for anything that grants access.
+
+## 7c. Player-state and lifecycle adoption
+
+The runtime installer downloads the pinned MVI 5.3.6 artifact. The formal
+Multiverse-WorldLifecycle 0.1.0 JAR is a locally verified build with no
+published release asset as of 2026-11-20. Its missing lock entry deliberately
+reports `MANUAL` and exits 1. Supply the verified JAR at
+`server/plugins/Multiverse-WorldLifecycle-0.1.0.jar`, then rerun the installer
+and verifier. The required SHA-256 is
+`2f362ee692b00078de108b4aeb5a2b580f1bfa36eead71b6e7f779bc7217d108`.
+
+The source project is [Multiverse-WorldLifecycle](https://github.com/killbus/Multiverse-WorldLifecycle).
+The local verified source checkout builds with JDK 25 and
+`./gradlew clean build` (`gradlew.bat clean build` on Windows); its output is
+`build/libs/Multiverse-WorldLifecycle-0.1.0.jar`. A project URL does not promise
+that public HEAD reproduces these bytes. Verify any supplied or rebuilt JAR
+against the lock; do not change the lock to accept an arbitrary build.
+Remove `WorldLifecyclePrototype.jar` from the active plugin directory if
+replacing the experiment, after preserving a stopped-server snapshot.
+Do not run both lifecycle plugins. Plugin hot reload is unsupported.
+
+Apply the bundle on a stopped server after reviewing the dry run. It enables
+MVI's `last_location` and full `game_statistics`, keeps ungrouped worlds
+independent, and preserves native login. Inventory, health and other standard
+shares follow the existing MVI group assignments. The bundle never deploys
+groups or player profiles. Old combined statistics become the outgoing
+world/group's initial baseline; absent destination statistics start at zero.
+No migration can reconstruct the historical per-world split from one total.
+
+`first-run: false` prevents MVI from implicitly creating a default group
+whose shares include `last_location`. A fresh host therefore starts with
+ungrouped worlds. If a new host should share inventory/statistics between
+its base dimensions while preserving each dimension's own last location,
+run these console commands before players join, using its actual world names:
+
+```text
+mvinv create-group survival
+mvinv add-shares survival all
+mvinv remove-shares survival last_location
+mvinv add-worlds survival world,world_nether,world_the_end
+mvinv info survival
+```
+
+This is a fresh-host example, not an upgrade script. On an existing host,
+inspect each existing group's configured and applicable shares with
+`mvinv info <group>`; include `game_statistics` where statistics should be
+shared and exclude `last_location` where locations remain per-world. Preserve
+its membership and profiles. Changing group membership selects different
+stored profiles and needs a deliberate migration; do not create a replacement
+group or bulk-clone profiles merely to adopt the plugin.
+
+The bundle declares installation and configuration; applying it does not
+start or restart a server. It also does not isolate native scoreboards,
+objectives or teams. Statistics presentation has a separate owner.
+
+## 7d. Statistics sidebar
+
+`extensions/world-statistics-board/` contains the independent
+MultiverseStatisticsBoard integration. It reads each eligible online player's
+current Bukkit `DEATHS`, groups the roster by MVI's effective statistics scope,
+and projects that roster to each viewer. It has no WorldLifecycle dependency
+and stores no player statistics.
+
+PacketEvents 2.14.0 is a separately installed, pinned runtime dependency.
+Build the presentation component with JDK 25:
+
+```sh
+cd extensions/world-statistics-board
+sh ./gradlew clean build
+```
+
+Use `gradlew.bat clean build` on Windows. Copy the matching
+`build/libs/MultiverseStatisticsBoard-0.1.0.jar` into the runtime lock's
+plugin path while the server is stopped. Its missing artifact uses the
+existing `MANUAL` installer result; the repository has no published download
+for this component. Verify the supplied bytes against the lock before start.
+
+The tracked configuration is
+`config/plugins/MultiverseStatisticsBoard/config.yml`: title `Deaths`, up to
+15 rows, and a periodic refresh every 20 server ticks, with additional refresh
+after join, world change, death and quit. Sort selection is descending deaths
+then stable UUID row identity; equal scores do not promise alphabetical name
+ordering. Only online players in the same eligible statistics scope appear.
+Changing the MVI group assignments changes this scope; no separate roster
+configuration or statistics database is introduced.
+
+The projection owns the viewer's generic and team-colored sidebars. Native
+scoreboard commands still update their original state; native list,
+below-name and team packets continue normally. When presentation ownership
+ends, the latest native sidebar selections are restored. Avoid combining it
+with another plugin that also claims exclusive sidebar ownership. MVI
+statistics being inactive, disabled, ambiguous across overlapping groups,
+or bypassed causes that viewer's projection to be withheld with a diagnostic
+instead of presenting mixed statistics as world-specific.
+
+This replaces sidebar presentation only. It does not rewrite native
+`deathCount`, dummy objectives, fake-player aggregates or map commands.
+Offline leaderboards and retrospective splitting of old combined totals are
+not provided. See the module README for implementation and validation details.
 
 ## 8. Known boundaries
 

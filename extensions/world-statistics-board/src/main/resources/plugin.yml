@@ -1,0 +1,6 @@
+name: MultiverseStatisticsBoard
+version: '${version}'
+main: io.github.killbus.statisticsboard.StatisticsBoardPlugin
+api-version: '26.2'
+depend: [Multiverse-Inventories, packetevents]
+description: Online death statistics for the active Multiverse-Inventories scope

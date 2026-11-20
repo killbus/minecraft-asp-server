@@ -24,6 +24,7 @@ Shape:
   "values": {
     "PACK_URL": "https://<public>:<port>/packs/pack-a.zip",
     "GEYSER_ADVERTISE_ADDRESS": "<public>:34003",
+    "WORLD_LIFECYCLE_MANAGED_WORLDS": "[\"adventure\", \"arena\"]",
     "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
   }
 }
@@ -58,3 +59,20 @@ update this file and the scene in the same change.
 `PACK_URL` must be `https://` — the frp entry serves no plaintext http. The
 one exception is loopback (`http://127.0.0.1`, `localhost`, `::1`), which
 never crosses the entry and stays the template's local-only default.
+
+`WORLD_LIFECYCLE_MANAGED_WORLDS` is the host's idle-unload allowlist. Its
+value is a **string containing a JSON array**, rendered as a YAML flow list
+in `plugins/MultiverseWorldLifecycle/config.yml`. Names must be unique,
+nonblank strings without control characters or surrounding whitespace.
+The renderer normalizes the array and refuses invalid input before writing
+any configuration. World existence and registration remain Multiverse's
+responsibility.
+
+The example explicitly supplies `"[]"`, which selects no worlds for automatic
+unloading. There is no manifest default. When upgrading an existing host,
+add this key to its existing settings file using its current managed world
+list; a missing key refuses the apply instead of resetting the list. Change
+the list here, then apply on a stopped server and restart. Editing the
+rendered plugin file is temporary because the next apply replaces it.
+The primary world is never automatically unloaded. Entry and saved-world
+login may load other registered worlds even when this list is empty.

@@ -144,3 +144,30 @@ os.replace(temporary, target)
 The first can leave a half-written `.mca`; the second is atomic and preserves
 metadata. Similarly, never relax the verifier to make a dirty artifact pass —
 regenerate it from the source instead.
+
+## Imported map state: native scoreboard scope
+
+Paper 26.2 uses one server main scoreboard: `ServerLevel.getScoreboard()`
+delegates to `MinecraftServer.getScoreboard()`. Copying `scoreboard.dat` into a
+world artifact does not establish a separate live scoreboard for that world.
+Do not replace the active default world's scoreboard when loading or unloading
+an additional map; other worlds and players use the same store.
+
+The Trials source contains `Deaths` with criterion `deathCount` and a sidebar
+assignment. Its command blocks also create that objective and select it for
+display. Therefore clearing a display slot once is not a durable per-world
+display policy, and hiding a sidebar does not make its counter world-specific.
+
+Multiverse-Inventories 5.3.6 has no scoreboard/objective/team sharable.
+Its optional `game_statistics` owns the complete Bukkit statistics set. The
+generic per-world/group policy, activation and adoption contract belong in
+[Multiverse Player State](./multiverse-player-state.md); they do not depend on
+any imported map. Inventory/health acceptance tests do not establish
+statistics or scoreboard isolation.
+
+When adapting an imported map, separately verify display audience, counting
+scope, objective/team naming, and commands that address the global scoreboard.
+Test two players in different worlds, a death in each world, unload/reload,
+and restart before claiming isolation. World lifecycle coordination owns none
+of these gameplay data policies. See the read-only evidence in
+`../../tasks/11-18-config-bundle/research/scoreboard-world-scope.md`.
