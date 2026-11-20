@@ -353,3 +353,34 @@ Consolidate startup resource-pack policy into minecraft-server.json with shared 
 ### Next Steps
 
 - Reconcile the rewritten test branch on the deployment host; merge any former standalone pack policy into resource_packs before startup.
+
+
+## Session 13: Configure backup targets and fix TLS template generation
+<!-- trellis-session: v=2 fp=7c9705e59027d36b -->
+
+**Date**: 2026-11-20
+**Task**: Configure backup targets and fix TLS template generation
+**Branch**: `feat/single-world-start`
+
+### Summary
+
+Move backup destinations into host settings; fix unintended command substitution in multi-certificate HAProxy comments. Fresh Trials save extracted locally for whole-folder upload.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ffc21b7` | feat(server): configure backup targets in host settings |
+| `ae52b69` | fix(scripts): prevent command substitution in TLS config comments |
+
+### Testing
+
+- [OK] 129 backup, launcher, renderer and selector tests passed; 57 scene tests passed; no skips. Shell, PowerShell, Python syntax and whitespace checks passed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Pull feat/single-world-start on the server; configure backup.targets and start with --world trials.

@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/single-world-start.md","reason":"Preserve complete snapshot scope and launcher behavior."}
+{"file":".trellis/spec/backend/config-bundle.md","reason":"Extend one shared host schema without resolving unrelated credentials."}

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 12
+- **Total Sessions**: 13
 - **Last Active**: 2026-11-20
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~355 | Active |
+| `journal-1.md` | ~386 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 13 | 2026-11-20 | Configure backup targets and fix TLS template generation | `ffc21b7`, `ae52b69` | `feat/single-world-start` |
 | 12 | 2026-11-20 | Unify host resource-pack settings | `8894cce` | `feat/single-world-start` |
 | 11 | 2026-11-20 | Select native resource packs by startup save | `8894cce`, `432ec36` | `feat/single-world-start` |
 | 10 | 2026-11-20 | Port deployment tooling to native single-world startup | `36046e9`, `7307c99` | `feat/single-world-start` |

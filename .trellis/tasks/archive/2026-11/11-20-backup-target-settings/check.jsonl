@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/single-world-start.md","reason":"Check target safety, backup behavior and cross-platform parity."}
+{"file":".trellis/spec/backend/config-bundle.md","reason":"Check shared host schema and consumer isolation."}
