@@ -88,6 +88,51 @@ or a Slime-format world is not automatically a complete primary save. Prepare
 and validate a complete native save in a separate disposable server first.
 This branch supplies no import or migration command.
 
+### Restart Trials from the original download
+
+The inspected `trials-of-the-past-52637.rar` from
+[Trials of the Past](https://www.minecraftmaps.com/52637-trials-of-the-past)
+already contains a complete native 26.2 save. Its SHA-256 is
+`2b7710df040aaa37666b6d284bc24122f897317dbcdebb9bd213f62409f7f91c`.
+Use that whole save, not the old
+`world/dimensions/minecraft/trials` directory. Keep `world/` intact.
+
+Upload the original RAR to `.tmp/` on the stopped host. These commands assume
+7-Zip's `7z` command is installed; both the staging path and destination must
+be absent. Run from the repository root:
+
+```sh
+(
+  set -eu
+  printf '%s  %s\n' \
+    2b7710df040aaa37666b6d284bc24122f897317dbcdebb9bd213f62409f7f91c \
+    .tmp/trials-of-the-past-52637.rar | sha256sum -c -
+  test ! -e .tmp/trials-fresh
+  test ! -L .tmp/trials-fresh
+  test ! -e server/trials
+  test ! -L server/trials
+  7z x .tmp/trials-of-the-past-52637.rar -o.tmp/trials-fresh
+  test -f '.tmp/trials-fresh/Trials of the past/level.dat'
+  mv -nT -- '.tmp/trials-fresh/Trials of the past' server/trials
+  test ! -e '.tmp/trials-fresh/Trials of the past'
+)
+```
+
+This preserves root metadata, scoreboard/objectives, map data, and all dimensions.
+No generated metadata, region trimming or staged 1.12 conversion is needed for
+this particular archive. Another download revision must be inspected separately.
+
+A disposable full copy reached `Done` on pinned Paper 26.2-135 and saved cleanly
+on stop. Its six original scoreboard objectives and `keep_inventory=true`
+remained. This is startup validation, not a complete gameplay test. Three old
+Nether chunks `(1,-8)`, `(1,-9)`, `(0,-11)` logged missing tick-priority field
+`p`; their nine old pending block updates were discarded on conversion, while
+their terrain remained. The archive is preserved unchanged; do not describe
+this conversion as lossless or delete those chunks to suppress the message.
+The current template's default game mode/difficulty differ from the map's
+adventure/peaceful metadata. Its entry command blocks include adventure-mode
+setup; verify the fresh-player introduction before opening play to everyone.
+
 Native player state, statistics, advancements, scoreboard/objectives/teams
 and dimension data belong to the selected save. Server configuration,
 whitelist/ban/operator lists and plugin configuration/databases are shared.
