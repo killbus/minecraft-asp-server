@@ -1,6 +1,7 @@
 """Execute launchers and backups in disposable server trees without Minecraft."""
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -83,7 +84,8 @@ class SingleWorldScriptsTests(unittest.TestCase):
         self.directory = Path(self.temporary.name)
         self.scripts = self.directory / "scripts"
         self.scripts.mkdir()
-        for name in ("start.sh", "start.cmd", "backup.sh", "backup.cmd", "backup-debug.cmd"):
+        for name in ("start.sh", "start.cmd", "backup.sh", "backup.cmd", "backup-debug.cmd",
+                     "select_resource_pack.py", "host_settings.py", "verify_runtime.py"):
             target = self.scripts / name
             target.write_text((REPOSITORY / "scripts" / name).read_text(encoding="utf-8"),
                               encoding="utf-8", newline="\r\n" if name.endswith(".cmd") else "\n")
@@ -99,8 +101,8 @@ class SingleWorldScriptsTests(unittest.TestCase):
         self.backups = self.directory / "backups"
         self.bin = self.directory / "bin"
         self.bin.mkdir()
-        self.elsewhere = self.directory / "elsewhere"
-        self.elsewhere.mkdir()
+        self.elsewhere = self.directory / "elsewhere/nested"
+        self.elsewhere.mkdir(parents=True)
         self.environment = dict(os.environ)
         for name in ("BACKUP_TARGETS", "ASP_SKIP_BACKUP", "ALLOW_ONLINE", "WORLD_NAME",
                      "PAUSE_ON_EXIT", "JAVA", "BACKUP_DEBUG"):
@@ -200,6 +202,169 @@ class SingleWorldScriptsTests(unittest.TestCase):
 
     def test_cmd_default_selection_and_pause(self):
         self.check_launches("cmd")
+
+    def check_pack_policy(self, shell):
+        self.prepare(shell, stub_backup=True)
+        settings = self.directory / "settings"
+        settings.mkdir()
+        policy = settings / "minecraft-server.json"
+        policy.write_text(json.dumps({
+            "schema_version": 1,
+            "values": {"MANAGEMENT_SERVER_SECRET": "env:UNSET_CREDENTIAL"},
+            "resource_packs": {
+                "default": {"url": "https://assets.example.com/global.zip", "sha1": "a" * 40},
+                "worlds": {"Puzzle-2": None, "--help": None},
+            },
+        }), encoding="utf-8")
+        expected_config = "../.tmp/startup/server.properties" if shell == "sh" else "..\\.tmp\\startup\\server.properties"
+        for world, expected_pack in ((None, True), ("Puzzle-2", False), ("Adventure_A", True), ("--help", False)):
+            with self.subTest(world=world):
+                if world:
+                    self.write(f"{world}/level.dat")
+                world_args = ["--world", world] if world else []
+                self.assertEqual([*world_args, "--config", expected_config],
+                                 self.assert_launch(shell, *world_args))
+                output = self.directory / ".tmp/startup/server.properties"
+                rendered = output.read_text(encoding="ascii")
+                self.assertIn("resource-pack-id=\n", rendered)
+                self.assertEqual(expected_pack, "global.zip" in rendered)
+                self.assertEqual(expected_pack, "a" * 40 in rendered)
+                output.write_text("level-name=stale\nresource-pack=stale\n", encoding="ascii")
+        policy.write_text(json.dumps({"schema_version": 1, "values": {
+            "MANAGEMENT_SERVER_SECRET": "env:UNSET_CREDENTIAL",
+        }}), encoding="utf-8")
+        self.assertEqual([], self.assert_launch(shell))
+        self.assertEqual(["--world", "Puzzle-2"], self.assert_launch(shell, "--world", "Puzzle-2"))
+        policy.unlink()
+        self.assertEqual([], self.assert_launch(shell))
+
+    def test_shell_pack_policy_selection_and_removal(self):
+        self.check_pack_policy("sh")
+
+    def test_cmd_pack_policy_selection_and_removal(self):
+        self.check_pack_policy("cmd")
+
+    def check_legacy_native_properties(self, shell):
+        self.prepare(shell, stub_backup=True)
+        settings = self.directory / "settings"
+        settings.mkdir()
+        (settings / "minecraft-server.json").write_text(
+            '{"schema_version":1,"values":{"MANAGEMENT_SERVER_SECRET":"env:UNSET_CREDENTIAL"}}',
+            encoding="utf-8")
+        properties = self.server / "server.properties"
+        properties.write_bytes(b"level-name=Native save name\n")
+        self.assertEqual([], self.assert_launch(shell))
+        properties.unlink()
+        self.assertEqual([], self.assert_launch(shell))
+        self.assertFalse((self.directory / ".tmp/startup/server.properties").exists())
+
+    def test_shell_legacy_settings_preserve_native_startup(self):
+        self.check_legacy_native_properties("sh")
+
+    def test_cmd_legacy_settings_preserve_native_startup(self):
+        self.check_legacy_native_properties("cmd")
+
+    def check_invalid_policy(self, shell):
+        self.prepare(shell, stub_backup=True)
+        settings = self.directory / "settings"
+        settings.mkdir()
+        (settings / "minecraft-server.json").write_text('{"schema_version":1}', encoding="utf-8")
+        result = self.run_script(f"start.{shell}")
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("ERROR:", result.stderr)
+        self.assertFalse(Path(self.environment["JAVA_CALLS"]).exists())
+        self.assertFalse(Path(str(self.backups) + ".called").exists())
+        self.assertFalse((self.directory / ".tmp/startup/server.properties").exists())
+
+    def test_shell_invalid_policy_stops_before_java_and_backup(self):
+        self.check_invalid_policy("sh")
+
+    def test_cmd_invalid_policy_stops_before_java_and_backup(self):
+        self.check_invalid_policy("cmd")
+
+    def check_standalone_migration(self, shell):
+        self.prepare(shell, stub_backup=True)
+        settings = self.directory / "settings"
+        settings.mkdir()
+        legacy = settings / "resource-packs.json"
+        legacy.write_text('{"schema_version":1,"default":null,"worlds":{}}', encoding="utf-8")
+        for unified_present in (False, True):
+            with self.subTest(unified_present=unified_present):
+                if unified_present:
+                    (settings / "minecraft-server.json").write_text(
+                        '{"schema_version":1,"values":{},"resource_packs":{"default":null,"worlds":{}}}',
+                        encoding="utf-8")
+                result = self.run_script(f"start.{shell}")
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertIn("move its default and worlds", result.stderr)
+                self.assertTrue(legacy.is_file())
+                self.assertFalse(Path(self.environment["JAVA_CALLS"]).exists())
+                self.assertFalse(Path(str(self.backups) + ".called").exists())
+                self.assertFalse((self.directory / ".tmp/startup/server.properties").exists())
+
+    def test_shell_standalone_policy_requires_migration(self):
+        self.check_standalone_migration("sh")
+
+    def test_cmd_standalone_policy_requires_migration(self):
+        self.check_standalone_migration("cmd")
+
+    def check_linked_pack_policy(self, shell):
+        self.prepare(shell, stub_backup=True)
+        settings = self.directory / "settings"
+        settings.mkdir()
+        policy = settings / "minecraft-server.json"
+        try:
+            policy.symlink_to(self.directory / "missing.json")
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"symlinks unavailable: {error}")
+        result = self.run_script(f"start.{shell}")
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("links and junctions", result.stderr)
+        self.assertFalse(Path(self.environment["JAVA_CALLS"]).exists())
+        self.assertFalse(Path(str(self.backups) + ".called").exists())
+
+    def test_shell_dangling_pack_policy_does_not_fall_back(self):
+        self.check_linked_pack_policy("sh")
+
+    def test_cmd_dangling_pack_policy_does_not_fall_back(self):
+        self.check_linked_pack_policy("cmd")
+
+    def check_linked_settings_without_policy(self, shell):
+        self.prepare(shell, stub_backup=True)
+        outside = self.directory / "outside-settings"
+        outside.mkdir()
+        settings = self.directory / "settings"
+        try:
+            settings.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"symlinks unavailable: {error}")
+        result = self.run_script(f"start.{shell}")
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("links and junctions", result.stderr)
+        self.assertFalse(Path(self.environment["JAVA_CALLS"]).exists())
+        self.assertFalse(Path(str(self.backups) + ".called").exists())
+
+    def test_shell_linked_settings_without_policy_does_not_fall_back(self):
+        self.check_linked_settings_without_policy("sh")
+
+    def test_cmd_linked_settings_without_policy_does_not_fall_back(self):
+        self.check_linked_settings_without_policy("cmd")
+
+    def check_settings_file(self, shell):
+        self.prepare(shell, stub_backup=True)
+        settings = self.directory / "settings"
+        settings.write_text("invalid settings directory", encoding="utf-8")
+        settings.chmod(0o755)
+        result = self.run_script(f"start.{shell}")
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertFalse(Path(self.environment["JAVA_CALLS"]).exists())
+        self.assertFalse(Path(str(self.backups) + ".called").exists())
+
+    def test_shell_settings_file_does_not_fall_back(self):
+        self.check_settings_file("sh")
+
+    def test_cmd_settings_file_does_not_fall_back(self):
+        self.check_settings_file("cmd")
 
     def check_invalid(self, shell):
         self.prepare(shell, stub_backup=True)

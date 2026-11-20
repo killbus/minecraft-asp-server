@@ -5,8 +5,8 @@
 `scripts/start.sh` and `scripts/start.cmd` launch plain Paper 26.2 build 135
 from the sibling `server/` directory. One process runs one primary native
 save and its native dimensions. Paper owns native save state; launchers own
-only argument validation and invocation. Configuration and plugin data are
-shared. No world registry, profile catalog, import, hot switch or plugin
+only argument validation, optional pack selection and invocation. Configuration
+and plugin data are otherwise shared. No world registry, profile catalog, import, hot switch or plugin
 configuration rewrite belongs here.
 
 ## Entry points
@@ -30,7 +30,9 @@ missing/empty names and duplicate selection exit `2`.
 
 Forward selection as Paper's native `--world NAME`. Preserve Java exit status,
 existing heap arguments, Windows `-pause`, `ASP_SKIP_BACKUP`, and the default
-60-minute pre-start backup interval. Selection never edits saves or properties.
+60-minute pre-start backup interval. Launchers never edit saves. Paper itself
+persists resolved CLI properties, including `--world`, to its selected config
+file; fake-Java fixture tests cannot establish otherwise.
 Operators stop the previous process before calling a launcher.
 
 Both optional scenes validate explicit selection before starting any sidecar
@@ -48,6 +50,101 @@ The marker is an existence check, not a complete-save validator. Never treat
 a dimension-only artifact as a complete primary save or fabricate `level.dat`
 to pass the check. Whole-save preparation and version compatibility are
 operator responsibilities documented in `docs/SINGLE-WORLD-SOP.md`.
+
+## Optional resource-pack policy
+
+`settings/minecraft-server.json` is the fixed host contract. Both launchers invoke
+`select_resource_pack.py` when it exists. `host_settings.py` owns shared schema
+decoding with the deployment renderer; startup consumes only `resource_packs`
+without resolving unrelated `values` env references or applying configs. Scenes
+only forward the save name. Missing file or absent section keeps the prior native
+config path; only a missing file avoids the Python requirement. An invalid or
+unreadable document fails before Java/backup, never falling back silently.
+
+The root schema has `schema_version: 1`, required `values` and optional
+`resource_packs`. Its policy has exactly `default`, `worlds` (no nested version).
+A descriptor is null
+or exactly `{url, sha1}`. Null disables a pack; a missing named override inherits
+the default. Validate all save names and descriptors, unknown fields, duplicate
+JSON keys, HTTPS/loopback URLs and 40-hex digests. No environment interpolation,
+remote fetching, file import, plugin configuration or save creation belongs here.
+
+When the policy exists, deployment renders a neutral canonical PACK_URL and the
+startup projection owns active selection. Without it, old PACK_URL deployment
+behavior remains; startup does not re-render values. Reject any leftover
+`settings/resource-packs.json` with migration guidance, whether or not the new
+host file exists. Move its default/worlds under the host document resource_packs
+and remove the redundant file manually. Do not auto-migrate or delete host data.
+
+Explicit `--world` selects the policy key; otherwise decode `level-name` using
+Java Properties semantics, defaulting to `world`. Decode strict UTF-8 with the
+native Latin-1 fallback, continuations, escaping and last-definition behavior.
+Backslash-only continuations must not turn comments or blank lines into keys;
+literal non-BMP characters and their escaped surrogate pairs denote the same key.
+Refuse invalid input rather than discarding unrelated properties.
+
+Generate `.tmp/startup/server.properties` atomically from the canonical file,
+overriding only native URL/SHA-1/ID and clearing deprecated `resource-pack-hash`.
+Clear ID to let Paper derive its stable URL-based default. Preserve required,
+prompt and unrelated keys. Never use a previous projection as the source.
+Refuse links/junctions along controlled input/output paths, including a linked
+settings directory whose policy is absent. An existing settings path must be a
+directory; both launchers refuse an uninspectable path. `--check` is read-only.
+Pass native `--config` with this projection; Paper's persistence stays in that
+file. Management-API property writes to it are intentionally ephemeral. Host
+settings backup already preserves the policy; generated files remain disposable.
+
+The policy applies to a primary save and its native dimensions, not simultaneously
+different resource packs per dimension. Configured SHA-1 avoids repeat network
+download on a matching Java 26.2/26.3 cache; resource activation/reload on login
+is separate and remains client behavior.
+
+On Windows capture `SCRIPT_DIR` before argument shifts. CMD `SHIFT` changes `%0`,
+so later `%~dp0` cannot reliably locate sibling scripts from arbitrary caller dirs.
+
+### Policy signatures and validation
+
+```text
+python3 -B scripts/select_resource_pack.py [--world NAME] [--check]
+```
+
+The helper is scoped to its repository; no alternative policy or server paths
+are accepted. Exit 0 reports a generated selection; exit 3 means valid native
+fallback without a projection. Exit 2 reports refusal on stderr. `--check`
+reports either valid selection with exit 0 and no writes. Launchers explicitly
+handle exit 3 without a --config argument and never reuse stale output.
+Normal no-policy startup validates host settings but does not inspect native
+properties, preserving Paper's first-run creation and implicit native save names
+outside the explicit `--world` grammar. `--check` may inspect those properties;
+it accepts implicit native names and reports native defaults when the file is
+absent. Explicit `--world` values retain validation on both paths.
+
+| Input or event | Result |
+| --- | --- |
+| Missing host file or absent section | Native startup, no generated config argument |
+| Legacy standalone file present | Migration error before Java/backup |
+| Default descriptor, absent world override | Inherit descriptor |
+| Named null override | Clear pack, SHA-1, ID and legacy hash |
+| Unknown key, duplicate key, invalid name/URL/hash | Refuse before Java/backup |
+| Linked/junction input or output | Refuse, no writes through the link |
+| `--check` | Report only; never create output |
+| Invalid Java property Unicode escape | Refuse instead of dropping config |
+| Atomic replacement failure | Preserve previous output; remove own temp file |
+
+Good: default null with a `trials` descriptor, so starting `world` clears the
+pack from the projection. Base: absent policy preserves the existing native
+configuration. Bad: retain a previous generated file's pack when selecting a
+save with no override. Wrong: generate a random UUID on every startup. Correct:
+keep the URL-derived native identity and supply the served file's SHA-1.
+
+`test_resource_pack_selection.py` covers schema, selection transitions,
+read-only checks, path safety, atomic failure, encoding/continuations/duplicates
+and canonical file preservation. Launcher tests cover both platforms,
+malformed policy before Java/backup, native argv and arbitrary caller
+directories. Unified-host regressions cover startup with an unset unrelated
+secret, section removal without stale output, legacy document compatibility,
+and explicit migration failure for standalone policy files. Native smoke evidence is required before claiming actual Paper
+property persistence behavior; fixture tests alone cannot establish it.
 
 ## Runtime and snapshots
 

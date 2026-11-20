@@ -1,8 +1,11 @@
 {
   "schema_version": 1,
   "values": {
-    "PACK_URL": "",
     "GEYSER_ADVERTISE_ADDRESS": "bedrock.example.com:34003",
     "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
+  },
+  "resource_packs": {
+    "default": null,
+    "worlds": {}
   }
 }

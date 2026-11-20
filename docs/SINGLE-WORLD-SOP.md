@@ -60,10 +60,13 @@ digits, underscores and hyphens. Paths, spaces, extra arguments and repeated
 must not be links or junctions. `-pause` is Windows-only and may appear before
 or after the world option.
 
-The scripts pass Paper's native `--world NAME` argument. They do not rewrite
-`server.properties`, rename saves or remember the last selection. Repeat the
-option on every start that needs it. Switching requires another graceful
-stop. Do not start a second process against this directory.
+The scripts pass Paper's native `--world NAME` argument. Paper itself saves
+resolved properties, including this selected `level-name`, into its active
+properties file. With the optional pack policy below, that file is disposable
+and the canonical `server/server.properties` is unchanged. Without a policy,
+Paper uses and may update the canonical file. Repeat `--world` on each start
+to make the intended selection explicit. Switching requires a graceful stop.
+Do not start a second process against this directory.
 
 Java 25+ is required. Bash uses `JAVA` or `java` on PATH. CMD uses `JAVA` when
 set to the full Java executable path, otherwise the existing local Scoop JDK
@@ -137,7 +140,8 @@ On first deployment only:
 
 On Windows, use `if not exist settings\minecraft-server.json copy
 settings\minecraft-server.example.json settings\minecraft-server.json`.
-Edit the file to set the public Geyser UDP advertisement and `PACK_URL`.
+Edit `values` for the public Geyser UDP advertisement and deployment coordinates.
+Configure optional global or save-specific packs in `resource_packs`, as below.
 Supply `MANAGEMENT_SERVER_SECRET` through the host environment; the example
 contains `env:MANAGEMENT_SERVER_SECRET`, not a credential. Keep any existing
 host JSON instead of replacing it with the example during an update.
@@ -148,12 +152,16 @@ python -B scripts/apply_config.py --settings settings/minecraft-server.json
 python -B scripts/apply_config.py --settings settings/minecraft-server.json --check
 ```
 
-`--set NAME=VALUE` overrides settings, then settings override environment,
-then declared defaults apply. Required values missing from every source fail
+`--set NAME=VALUE` overrides `values`, then settings override environment,
+then declared defaults apply. When `resource_packs` exists, it owns pack selection:
+the renderer clears the canonical native pack and refuses a conflicting nonempty
+`--set PACK_URL`. Required values missing from every source fail
 before any write. `--dry-run` previews `CREATE`, `UPDATE` and `UNCHANGED`;
 `--check` exits `1` for differences and writes nothing. Invalid input exits `2`.
-Host JSON is ignored by git, explicitly selected with `--settings`, and backed
-up with the server. Restore it only to its originating host.
+Host JSON is ignored by git and backed up with the server. The renderer uses
+explicit `--settings`; startup reads `settings/minecraft-server.json` for its
+optional pack policy without resolving unrelated `env:` credentials. Restore
+the file only to its originating host.
 
 The default template uses `level-name=world`; applying it sets that default.
 Always pass `--world NAME` for a named existing save when that is your intended
@@ -161,14 +169,118 @@ selection. There is no settings or environment world registry.
 
 ## Native resource packs and production scenes
 
-`PACK_URL` renders Paper's native `resource-pack` property for the active
-process. Choose `"PACK_URL": ""` explicitly to offer no pack, or set a public
+For legacy host files without `resource_packs`, `PACK_URL` renders Paper's native `resource-pack` property
+for the active process. Choose `"PACK_URL": ""` explicitly to offer no pack, or set a public
 `https://<entry-host>:<port>/packs/<file>.zip` URL. The key remains required;
 `--set PACK_URL=` explicitly clears it for one apply. Plain HTTP is allowed
 only for loopback testing (`127.0.0.1`, `localhost`, `[::1]`). The template uses
-`require-resource-pack=false`; SHA-1, ID and prompt remain empty. There is no
-per-save pack registry: review the global setting when selecting another save.
+`require-resource-pack=false`; SHA-1, ID and prompt remain empty. For cached
+downloads and automatic selection by startup save, use the policy below.
 Java packs are not automatically converted into Bedrock resource packs.
+
+### Global or save-specific pack policy
+
+Add `resource_packs` alongside `values` in your existing
+`settings/minecraft-server.json`. Both direct launchers read that section
+automatically; deployment continues using the same file with
+`apply_config.py --settings settings/minecraft-server.json`. Keep existing values and credentials.
+The single host file stays ignored by Git and enters host-settings backups.
+The new example has `default: null` and empty `worlds`, so it offers no pack
+until configured.
+
+For Painted only when starting `trials`:
+
+```json
+{
+  "schema_version": 1,
+  "values": {
+    "GEYSER_ADVERTISE_ADDRESS": "<your-existing-UDP-entry>:<port>",
+    "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
+  },
+  "resource_packs": {
+    "default": null,
+    "worlds": {
+      "trials": {
+        "url": "https://<your-existing-entry-host>:<port>/packs/pack-a.zip",
+        "sha1": "<40 hexadecimal characters from the served ZIP>"
+      }
+    }
+  }
+}
+```
+
+Compute the digest from the exact file being served, not from a differently
+repacked original download:
+
+```sh
+sha1sum server/packs/pack-a.zip
+python3 -B scripts/select_resource_pack.py --world trials --check
+python3 -B scripts/select_resource_pack.py --world world --check
+```
+
+Windows equivalent: `Get-FileHash -Algorithm SHA1 server/packs/pack-a.zip` and
+`python -B scripts/select_resource_pack.py --world trials --check`.
+
+With the section present, `apply_config.py` always renders an empty canonical
+`resource-pack`; startup supplies the actual selection. Remove old
+`values.PACK_URL` after migration: its value and environment `PACK_URL` are
+ignored under this policy, while a conflicting nonempty `--set PACK_URL` fails.
+Without the section, startup retains native properties and does not apply
+deployment values itself. Removing a policy does not automatically clear an
+older canonical pack setting, so inspect that file when reverting to legacy mode.
+The no-policy path leaves native first-run properties creation and implicit
+`level-name` handling to Paper; the explicit `--world NAME` validation is unchanged.
+
+If you already created `settings/resource-packs.json` from the earlier version,
+move its `default` and `worlds` into this section, leaving schema_version only
+at the host document root. Then remove the redundant file after reviewing the
+merge. Startup reports a migration error while that old file exists, avoiding
+a silent fallback or two competing sources. Do not replace the host file with
+the example during an update.
+
+- `default: null`: unspecified saves offer no pack.
+- A pack object in `default`: all saves inherit that pack.
+- A named entry in `worlds`: that save overrides the default.
+- A named entry set to `null`: that save explicitly disables even a global pack.
+
+Names refer to the selected primary save (`--world`, otherwise `level-name`),
+not dimensions within it. The selected pack covers that running game's Nether
+and End too. Changing selection still requires stop/start; no additional scene
+argument is needed. An invalid host document refuses Java startup. Python 3 is
+needed when the host file exists, including legacy files without the new section.
+Without a host file the native launcher path does not require Python.
+Scene sidecars may already be running when that validation fails;
+use the helper's `--check` before scene startup to inspect the selection.
+
+Startup projects the URL and mandatory SHA-1 into
+`.tmp/startup/server.properties`, clears legacy pack hash/ID fields, and passes
+Paper `--config` for that file. Paper derives a stable ID from the URL. Native
+required/prompt flags and other canonical properties remain effective. Neither
+the save nor canonical properties are modified by this projection. Paper may
+write to the generated file while running; property changes made through its
+management API therefore do not persist across regeneration. Make durable
+changes in the canonical configuration. Do not edit or delete the active
+generated file while Paper is running.
+
+### Reconnect, download and reload
+
+On login the server offers the pack again. The Java client chooses whether to
+fetch bytes or reuse its cache, then activates the resources. The Mojang reload
+screen can appear on a cache hit too. In inspected 26.2 and 26.3 clients, a valid
+matching SHA-1 allows a cache return before opening HTTP. An empty/invalid hash
+instead downloads the bytes before deduplicating by their computed hash.
+Changing the URL also changes the native default ID and can require one new
+download; keep the URL stable while the content is unchanged.
+
+To distinguish these cases, observe the packs sidecar's access log during a
+reconnect. A new `GET /packs/pack-a.zip` with a full `200` transfer is download
+evidence. Client `latest.log` may instead say `Returning cached file since
+actual hash matches requested` followed by `Reloading ResourceManager`.
+Repeated entries in the client's `downloads/log.json` alone do not prove HTTP
+traffic: it records cache returns as well. These facts concern Java edition;
+Geyser does not turn this ZIP into a Bedrock pack.
+
+### Serving packs through the existing entry
 
 Place regenerable pack ZIPs under `server/packs/` and retain their source and
 hash separately. The packs server strips `/packs/` and serves this directory.

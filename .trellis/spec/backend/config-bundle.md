@@ -15,6 +15,7 @@ This spec applies when changing:
 - `config.lock.json`
 - `settings/`
 - `scripts/apply_config.py`
+- `scripts/host_settings.py`
 - `tests/test_apply_config.py`
 - the backup/snapshot descriptions in `docs/SINGLE-WORLD-SOP.md`
 
@@ -36,7 +37,9 @@ python -B scripts/apply_config.py \
 ```
 
 Values resolve as: `--set` first, then the settings file, then the process
-environment, then the manifest default, then refuse. `--dry-run` and
+environment, then the manifest default, then refuse. When `resource_packs` is
+present it owns pack selection: canonical PACK_URL renders empty and a nonempty
+explicit PACK_URL override is refused. `--dry-run` and
 `--check` are mutually exclusive in effect; neither writes.
 
 ### 3. Contracts
@@ -64,16 +67,25 @@ Settings shape, also optional:
 {
   "schema_version": 1,
   "values": {
-    "PACK_URL": "https://<public>:<port>/packs/pack-a.zip",
     "GEYSER_ADVERTISE_ADDRESS": "<public>:34003",
     "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
+  },
+  "resource_packs": {
+    "default": null,
+    "worlds": {}
   }
 }
 ```
 
 A settings file holds per-host coordinates: public values that differ between
 hosts. It is named after the host and passed explicitly with `--settings`;
-nothing reads `settings/` implicitly. It lives outside `config/`, because
+the renderer never discovers host settings implicitly. Direct launchers read
+fixed `settings/minecraft-server.json` for its optional `resource_packs` section,
+as specified in `single-world-start.md`. `scripts/host_settings.py` owns common
+JSON/schema validation and raw value/reference validation for both consumers.
+Only the renderer resolves `values` env references. Startup must not require
+unrelated deployment secrets. Other renderer filenames are not startup inputs.
+Host coordinates live outside `config/`, because
 `config/` is a byte-for-byte mirror of `server/` and a settings file has no
 destination path.
 
@@ -84,7 +96,11 @@ deployment. That untracked-ness makes the file instance state: it is part of
 the server snapshot described in `docs/SINGLE-WORLD-SOP.md`, and that
 snapshot's copy is restored only onto the host it came from.
 
-The file has exactly two keys: `schema_version` and `values`. `values` keys
+The file requires `schema_version` and `values`, with optional `resource_packs`.
+No other keys are accepted. `resource_packs` has exactly `default` and `worlds`;
+each descriptor is null or exactly `{url, sha1}`, with a valid public HTTPS or
+loopback HTTP URL and 40-hex SHA-1. See the startup spec for selection semantics.
+`values` keys
 are placeholder names, not paths. A key no template declares is refused, so a
 typo cannot sit silent. A credential is never a literal: it is written
 `env:VARIABLE`, resolved from the process environment at render time, and
@@ -116,13 +132,23 @@ native save are refused, including configuration links into save subdirectories.
 Historical plugin player/profile
 state remains protected even though its plugin is not distributed.
 
-`PACK_URL` is required and renders native `server.properties` `resource-pack`.
+Without `resource_packs`, legacy `PACK_URL` is required and renders native
+`server.properties` `resource-pack`.
 An exact empty string from settings, `--set PACK_URL=` or environment means no
 pack. A nonempty value must parse as HTTPS with a host, or HTTP on loopback
 (`127.0.0.1`, `localhost`, `[::1]`). Reject whitespace, controls, credentials and
 malformed hosts/ports. No Multiverse or PackManagerPro configuration is shipped.
 Properties interpolation escapes backslashes and rejects control characters
 so values cannot create an extra property or continuation line.
+
+With `resource_packs`, keep native canonical `resource-pack` empty independently
+of values/environment PACK_URL; the startup projection owns the active pack.
+PACK_URL can be omitted from values. A legacy PACK_URL reference is not resolved
+under this policy; no unused environment secret should be required for it.
+Nonempty explicit `--set PACK_URL=...` fails as conflicting, exact empty remains
+valid. Never make apply_config choose a startup world, write policy files or
+generate the startup projection. The existing template/manifest placeholder is
+an internal compatibility slot, not a second policy owner.
 
 Apply contract:
 
@@ -165,7 +191,10 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 | Settings file absent or unreadable | `ERROR: cannot read settings ...`, exit 2 |
 | Settings JSON is malformed or a key repeats | `ERROR: settings are not valid JSON ...`, exit 2 |
 | Settings lack `schema_version: 1` or a `values` object | `ERROR: settings must ...`, exit 2 |
-| Settings hold a top-level key other than `schema_version`/`values` | `ERROR: settings hold an unknown key ...`, exit 2 |
+| Settings hold a key other than `schema_version`/`values`/`resource_packs` | `ERROR: settings hold an unknown key ...`, exit 2 |
+| Invalid resource_packs section | Refuse before rendering/writing |
+| resource_packs exists, PACK_URL omitted or set by host/environment | Render empty canonical native pack |
+| resource_packs exists, nonempty explicit --set PACK_URL | Refuse conflicting ownership |
 | Settings value is blank other than exact empty `PACK_URL`, or holds `${` | `ERROR: settings value ...`, exit 2 |
 | Settings value is `env:NAME` and `NAME` is unset | `ERROR: ... needs NAME in the environment`, exit 2 |
 | Settings value is `env:` with no valid name | `ERROR: ... must be env:NAME`, exit 2 |
@@ -180,8 +209,8 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 - Good: `--check` on an applied fixture exits 0 with every template `UNCHANGED`.
 - Base: a fresh host copies `settings/<host>.example.json` to
   `settings/<host>.json`, edits the coordinates, and gets every template as `CREATE`;
-  `PACK_URL` and `GEYSER_ADVERTISE_ADDRESS` come from that file, the credential
-  from the environment.
+  `GEYSER_ADVERTISE_ADDRESS` comes from values, the credential from environment,
+  and resource_packs selects no pack until configured.
 - Good: `--settings settings/minecraft-server.json` with
   `MANAGEMENT_SERVER_SECRET` exported renders the same bytes as three
   `--set` flags, and the file itself holds no credential.
@@ -223,7 +252,12 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 - full bundle round-trip and repeated apply against an isolated fixture, preserving
   native saves, player data, host settings and existing plugin instance state
 - empty pack selection from settings/CLI/environment; missing and malformed URL
-  refusals; properties escaping and control rejection
+  refusals on legacy documents; properties escaping and control rejection
+- one shared document accepted by both consumers; unrelated env references are
+  validated without resolution at startup, but resolved when rendering values
+- policy clears native PACK_URL even if omitted or populated in values/env;
+  unused legacy env reference is not resolved; conflicting CLI override refused
+- unknown/malformed resource_packs fields refused consistently by both consumers
 - named-save manifest injection and native save/configuration root collision refusal
 - backup snapshots `settings/*.json`, omits `*.example.json`, and lists the
   copied file in `MANIFEST.txt`

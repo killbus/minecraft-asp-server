@@ -18,6 +18,7 @@ REM    scripts\start.cmd -pause        extra: pause on exit (double-click use)
 REM  Requires: Java 25 (MC 26.1+ refuses older JDKs).
 REM ============================================================
 setlocal EnableExtensions DisableDelayedExpansion
+set "SCRIPT_DIR=%~dp0"
 set "WORLD_NAME="
 set "PAUSE_ON_EXIT="
 :parse_args
@@ -46,12 +47,30 @@ echo [start] NAME must use ASCII letters, digits, _ or -. 1>&2
 exit /b 2
 
 :args_done
-cd /d "%~dp0..\server" || exit /b 1
+cd /d "%SCRIPT_DIR%..\server" || exit /b 1
 set "WORLD_ARGS="
-if not defined WORLD_NAME goto :java_setup
+if not defined WORLD_NAME goto :pack_setup
 powershell -NoProfile -Command "$world=Join-Path (Get-Location) $env:WORLD_NAME; $level=Join-Path $world 'level.dat'; if (!(Test-Path -LiteralPath $level -PathType Leaf)) { exit 2 }; foreach ($path in @($world,$level)) { if ((Get-Item -LiteralPath $path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 2 } }"
 if errorlevel 1 goto :invalid_world
 set "WORLD_ARGS=--world %WORLD_NAME%"
+
+:pack_setup
+set "CONFIG_ARGS="
+powershell -NoProfile -Command "try { $settings=Get-Item -LiteralPath '..\settings' -Force -ErrorAction Stop; if ($settings.Attributes -band [IO.FileAttributes]::ReparsePoint) { exit 0 }; if (!$settings.PSIsContainer) { throw 'settings must be a directory' }; foreach ($name in @('minecraft-server.json','resource-packs.json')) { try { $null=Get-Item -LiteralPath (Join-Path $settings.FullName $name) -Force -ErrorAction Stop; exit 0 } catch [System.Management.Automation.ItemNotFoundException] {} }; exit 1 } catch [System.Management.Automation.ItemNotFoundException] { exit 1 } catch { Write-Error $_; exit 2 }"
+if errorlevel 2 goto :invalid_pack_policy
+if errorlevel 1 goto :java_setup
+where python >nul 2>nul
+if errorlevel 1 (
+    echo [start] ERROR: python is required to validate settings\minecraft-server.json and legacy pack settings 1>&2
+    exit /b 2
+)
+set "PACK_ARGS="
+if defined WORLD_NAME set "PACK_ARGS=--world=%WORLD_NAME%"
+python -B "%SCRIPT_DIR%select_resource_pack.py" %PACK_ARGS%
+set "PACK_STATUS=%errorlevel%"
+if "%PACK_STATUS%"=="3" goto :java_setup
+if not "%PACK_STATUS%"=="0" goto :invalid_pack_policy
+set "CONFIG_ARGS=--config ..\.tmp\startup\server.properties"
 
 :java_setup
 if not defined JAVA set "JAVA=D:\Applications\Scoop\apps\temurin25-jdk\current\bin\java.exe"
@@ -71,14 +90,14 @@ if not exist "paper-server.jar" (
 REM --- pre-start backup (backup.cmd changes cwd, so restore it after) ---
 if not "%ASP_SKIP_BACKUP%"=="1" (
     if not defined BACKUP_MIN_INTERVAL set "BACKUP_MIN_INTERVAL=60"
-    call "%~dp0backup.cmd"
+    call "%SCRIPT_DIR%backup.cmd"
     if errorlevel 1 echo [start] WARN: pre-start backup failed; starting the server anyway.
-    cd /d "%~dp0..\server"
+    cd /d "%SCRIPT_DIR%..\server"
 )
 
 REM -Xmx / -Xms: tune to your RAM. Bedrock+Java mixed load is heavier
 REM than Java-only. 4G heap is a sane default for a small SMP.
-"%JAVA%" -Xms2G -Xmx4G -XX:+UseG1GC -Dpaper.disableStartupVersionCheck=true -jar paper-server.jar %WORLD_ARGS%
+"%JAVA%" -Xms2G -Xmx4G -XX:+UseG1GC -Dpaper.disableStartupVersionCheck=true -jar paper-server.jar %WORLD_ARGS% %CONFIG_ARGS%
 set "EXITCODE=%errorlevel%"
 echo.
 echo [start] Server exited (code %EXITCODE%).
@@ -88,4 +107,8 @@ endlocal & exit /b %EXITCODE%
 
 :invalid_world
 echo [start] ERROR: --world requires an existing native save at server\%WORLD_NAME%\level.dat ^(no links^) 1>&2
+exit /b 2
+
+:invalid_pack_policy
+echo [start] ERROR: cannot select resource pack; check settings\minecraft-server.json and the preceding error. 1>&2
 exit /b 2

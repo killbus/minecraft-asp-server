@@ -235,6 +235,85 @@ class ApplyConfigTests(unittest.TestCase):
         self.save_settings({"SECRET": ""})
         self.assert_refused("nonblank", "--settings", str(self.settings_path))
 
+    def test_policy_owns_pack_url_and_does_not_resolve_legacy_reference(self):
+        self.add("server.properties", b"resource-pack=${PACK_URL}\nseed=${SECRET}\n",
+                 [{"name": "PACK_URL"}, {"name": "SECRET"}])
+        self.save()
+        os.environ["PACK_URL"] = "http://unusable.example.com/env.zip"
+        for legacy in (None, "https://legacy.example.com/old.zip", "env:ABSENT_PACK_URL"):
+            with self.subTest(legacy=legacy):
+                values = {"SECRET": "env:SOURCE"}
+                if legacy is not None:
+                    values["PACK_URL"] = legacy
+                self.settings_path.write_text(json.dumps({
+                    "schema_version": 1, "values": values,
+                    "resource_packs": {"default": {
+                        "url": "https://assets.example.com/default.zip", "sha1": "a" * 40,
+                    }, "worlds": {}},
+                }), encoding="utf-8")
+                with patch.dict(os.environ, {"SOURCE": "fixture-secret"}):
+                    code, output, errors = self.run_tool("--settings", str(self.settings_path))
+                    self.assertEqual(0, code, errors)
+                    self.assertEqual(0, self.run_tool("--settings", str(self.settings_path),
+                                                     "--set", "PACK_URL=")[0])
+                self.assertNotIn("fixture-secret", output + errors)
+                self.assertEqual(b"resource-pack=\nseed=fixture-secret\n",
+                                 (self.server / "server.properties").read_bytes())
+
+    def test_policy_refuses_conflicting_explicit_pack_url_before_writing(self):
+        self.add("server.properties", b"resource-pack=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        self.settings_path.write_text(json.dumps({
+            "schema_version": 1, "values": {},
+            "resource_packs": {"default": None, "worlds": {}},
+        }), encoding="utf-8")
+        self.assert_refused("conflicts with settings resource_packs", "--settings", str(self.settings_path),
+                            "--set", "PACK_URL=https://conflict.example.com/pack.zip")
+        self.assertFalse((self.server / "server.properties").exists())
+
+    def test_renderer_rejects_invalid_pack_policy_before_writing(self):
+        self.add("server.properties", b"resource-pack=${PACK_URL}\n", [{"name": "PACK_URL"}])
+        self.save()
+        self.settings_path.write_text(json.dumps({
+            "schema_version": 1, "values": {"PACK_URL": ""},
+            "resource_packs": {"default": None, "worlds": {"unused": {
+                "url": "https://assets.example.com/pack.zip", "sha1": "not-a-sha1",
+            }}},
+        }), encoding="utf-8")
+        self.assert_refused("sha1", "--settings", str(self.settings_path))
+        self.assertFalse((self.server / "server.properties").exists())
+
+    def test_shared_settings_refuse_invalid_structure_and_values(self):
+        self.add("server.properties", b"port=1\n")
+        self.save()
+        valid = {"schema_version": 1, "values": {}}
+        cases = [None, [], {}, {**valid, "schema_version": True},
+                 {**valid, "schema_version": 1.0}, {**valid, "values": []},
+                 {**valid, "resource_packs": None},
+                 {**valid, "values": {"BAD NAME": "literal"}},
+                 {**valid, "values": {"SECRET": "env:sensitive-not-a-name"}},
+                 {**valid, "values": {"SECRET": "env:NAME\n"}},
+                 {**valid, "values": {"SECRET": 123}},
+                 {**valid, "values": {"SECRET": "sensitive-${VALUE}"}}]
+        for document in cases:
+            with self.subTest(document=document):
+                self.settings_path.write_text(json.dumps(document), encoding="utf-8")
+                errors = self.assert_refused(None, "--settings", str(self.settings_path))
+                self.assertNotIn("sensitive-", errors)
+                self.assertFalse((self.server / "server.properties").exists())
+        for payload in (b'{"schema_version":1,"values":{"SECRET":"first","SECRET":"second"}}',
+                        b"not json", b"\xff"):
+            self.settings_path.write_bytes(payload)
+            self.assert_refused(None, "--settings", str(self.settings_path))
+
+    def test_resolved_credential_errors_do_not_echo_secret(self):
+        self.add("server.properties", b"secret=${SECRET}\n", [{"name": "SECRET"}])
+        self.save()
+        self.save_settings({"SECRET": "env:SOURCE"})
+        with patch.dict(os.environ, {"SOURCE": "sensitive-${INVALID}"}):
+            errors = self.assert_refused("still contains a placeholder", "--settings", str(self.settings_path))
+        self.assertNotIn("sensitive-", errors)
+
     def test_explicit_empty_pack_from_settings_cli_and_environment(self):
         self.add("server.properties", b"resource-pack=${PACK_URL}\n", [{"name": "PACK_URL"}])
         self.save()
@@ -625,10 +704,10 @@ class RepositoryConfigTests(unittest.TestCase):
                     {
                         "schema_version": 1,
                         "values": {
-                            "PACK_URL": "",
                             "GEYSER_ADVERTISE_ADDRESS": "bedrock.example.com:34003",
                             "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET",
                         },
+                        "resource_packs": {"default": None, "worlds": {}},
                     }
                 ),
                 encoding="utf-8",

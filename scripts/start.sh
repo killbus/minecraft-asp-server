@@ -49,6 +49,27 @@ if [ -n "$WORLD_NAME" ]; then
     WORLD_ARGS=(--world "$WORLD_NAME")
 fi
 
+CONFIG_ARGS=()
+if [ -e ../settings/minecraft-server.json ] || [ -L ../settings/minecraft-server.json ] ||
+   [ -e ../settings/resource-packs.json ] || [ -L ../settings/resource-packs.json ] || [ -L ../settings ]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "[start] ERROR: python3 is required to validate settings/minecraft-server.json and legacy pack settings" >&2
+        exit 2
+    fi
+    PACK_ARGS=()
+    if [ -n "$WORLD_NAME" ]; then PACK_ARGS=("--world=$WORLD_NAME"); fi
+    PACK_STATUS=0
+    python3 -B "$SCRIPT_DIR/select_resource_pack.py" "${PACK_ARGS[@]}" || PACK_STATUS=$?
+    case "$PACK_STATUS" in
+        0) CONFIG_ARGS=(--config ../.tmp/startup/server.properties) ;;
+        3) ;;
+        *) exit 2 ;;
+    esac
+elif [ -e ../settings ] && { [ ! -d ../settings ] || [ ! -x ../settings ]; }; then
+    echo "[start] ERROR: cannot inspect settings/minecraft-server.json; check settings permissions" >&2
+    exit 2
+fi
+
 # JAVA may point at a full java binary; otherwise fall back to PATH.
 JAVA="${JAVA:-java}"
 
@@ -79,4 +100,4 @@ fi
 # heavier than Java-only. 4G heap is a sane default for a small SMP.
 exec "$JAVA" -Xms2G -Xmx4G -XX:+UseG1GC \
     -Dpaper.disableStartupVersionCheck=true \
-    -jar paper-server.jar "${WORLD_ARGS[@]}"
+    -jar paper-server.jar "${WORLD_ARGS[@]}" "${CONFIG_ARGS[@]}"

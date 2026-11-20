@@ -8,7 +8,8 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import sys
-from urllib.parse import urlsplit
+
+from host_settings import ENV_REFERENCE, read_host_settings, validate_pack_url
 
 from verify_runtime import (
     VerificationError,
@@ -19,8 +20,6 @@ from verify_runtime import (
 )
 
 PLACEHOLDER = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
-VARIABLE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-ENV_REFERENCE = "env:"
 SOURCE_ROOT_FILES = {
     "server.properties", "bukkit.yml", "spigot.yml", "commands.yml", "permissions.yml",
 }
@@ -164,47 +163,17 @@ def read_values(assignments):
 
 
 def read_settings(path):
-    """Read the per-host settings file.
+    """Read host values and resolve their credential references for deployment."""
+    return resolve_settings(read_host_settings(path))
 
-    A settings file holds deployment coordinates - values that are per host,
-    public, and worth reviewing in a diff. A credential is named as
-    ``env:VARIABLE`` and resolved from the process environment, so no credential
-    enters the untracked host JSON.
-    """
-    if path is None:
-        return {}
-    try:
-        raw = Path(path).read_text(encoding="utf-8")
-    except OSError as error:
-        raise VerificationError(f"cannot read settings {path}: {error}") from error
-    try:
-        settings = json.loads(raw, object_pairs_hook=unique_json_object)
-    except ValueError as error:
-        raise VerificationError(f"settings are not valid JSON: {error}") from error
-    if not isinstance(settings, dict):
-        raise VerificationError("settings must be a JSON object")
-    unknown = sorted(set(settings) - {"schema_version", "values"})
-    if unknown:
-        raise VerificationError(f"settings hold an unknown key {unknown[0]!r}")
-    if settings.get("schema_version") != 1:
-        raise VerificationError("settings must declare schema_version 1")
-    declared = settings.get("values")
-    if not isinstance(declared, dict):
-        raise VerificationError("settings must hold a `values` object")
+
+def resolve_settings(settings):
     resolved = {}
-    for name, value in declared.items():
-        if not isinstance(value, str) or (
-            not value.strip() and not (name == "PACK_URL" and value == "")
-        ):
-            raise VerificationError(f"settings value {name} must be a nonblank string")
-        if "${" in value:
-            raise VerificationError(f"settings value {name} must not hold a placeholder")
-        if value.startswith(ENV_REFERENCE):
+    for name, value in settings["values"].items():
+        if name == "PACK_URL" and "resource_packs" in settings:
+            resolved[name] = ""
+        elif value.startswith(ENV_REFERENCE):
             variable = value[len(ENV_REFERENCE):]
-            if not VARIABLE.match(variable):
-                raise VerificationError(
-                    f"settings value {name} must be {ENV_REFERENCE}NAME, got {value!r}"
-                )
             if variable not in os.environ:
                 raise VerificationError(
                     f"settings value {name} needs {variable} in the environment"
@@ -213,32 +182,6 @@ def read_settings(path):
         else:
             resolved[name] = value
     return resolved
-
-def validate_pack_url(value):
-    if value == "":
-        return
-    valid = False
-    try:
-        parsed = urlsplit(value)
-        valid = (
-            not any(character.isspace() or ord(character) < 32 or ord(character) == 127
-                    for character in value)
-            and "\\" not in parsed.netloc
-            and bool(parsed.hostname)
-            and parsed.username is None
-            and parsed.password is None
-            and (parsed.port is None or 0 < parsed.port <= 65535)
-            and (parsed.scheme == "https" or (
-                parsed.scheme == "http" and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
-            ))
-        )
-    except ValueError:
-        pass
-    if not valid:
-        raise VerificationError(
-            "value for PACK_URL must be https:// with a host, loopback http://, "
-            "or an explicit empty string for no pack"
-        )
 
 
 def resolve(name, values, default, settings):
@@ -258,7 +201,7 @@ def resolve(name, values, default, settings):
         )
     if "${" in value:
         raise VerificationError(
-            f"value for {name} still contains a placeholder: {value!r}"
+            f"value for {name} still contains a placeholder"
         )
     if name == "PACK_URL":
         validate_pack_url(value)
@@ -387,12 +330,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         manifest = read_manifest(args.lock)
-        settings = read_settings(args.settings)
+        document = read_host_settings(args.settings)
+        settings = resolve_settings(document)
+        values = read_values(args.values)
+        if "resource_packs" in document:
+            if values.get("PACK_URL", "") != "":
+                raise VerificationError("--set PACK_URL conflicts with settings resource_packs; configure the policy instead")
+            values["PACK_URL"] = ""
         results = plan(
             args.config_dir,
             args.server_dir,
             manifest,
-            read_values(args.values),
+            values,
             settings,
         )
     except VerificationError as error:
