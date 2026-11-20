@@ -10,12 +10,14 @@ The existing profile/lifecycle/sidebar implementation remains a validated scoped
 
 ## Recoverable source checkpoints
 
-- Server integration: branch `archive/multiverse-2026-11-20`, annotated tag `freeze/multiverse-2026-11-20` after the freeze commit and task bookkeeping. Includes runtime/configuration contracts, sidebar source and research. The original main branch is not reset or rewritten.
+- Server integration: branch `archive/multiverse-2026-11-20`, annotated tag `freeze/multiverse-2026-11-20` at freeze commit `b7837eb`. Includes runtime/configuration contracts, sidebar source and research. The original main branch is not reset or rewritten.
 - Standalone lifecycle source: `D:/Repositories/Multiverse-WorldLifecycle`, commit `2bfab4c`, annotated tag `freeze/multiverse-2026-11-20`. No source had previously been committed there. Its first commit preserves the already validated implementation and documentation; no code behavior changed during this freeze.
 - New startup branch: `feat/single-world-start`, based exactly on `10c794e25981e8d5625dbcc9655b79db572d4b30`. The next historical commit, `01cd4a1`, introduced Paper and Multiverse together. Plain Paper must therefore be restored as part of the new minimal launcher work.
 - New worktree: `.tmp/single-world-start`. Its source becomes durable through its own branch commits; the worktree directory itself remains disposable.
 
 No remote push or release publication is part of this freeze. The historical base does not contain subsequent configuration-bundle, installer, resource-pack-route or PROXY fixes; those are not silently inherited by the new branch.
+
+Trellis archive staging hit two automatic-approval timeouts. The uncommitted directory move was reversed, preserving all original paths. The task is marked completed/frozen in place instead of submitting another recursive archive-staging attempt.
 
 ## Verification at freeze
 
