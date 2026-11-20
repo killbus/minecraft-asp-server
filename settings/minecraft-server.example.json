@@ -7,5 +7,8 @@
   "resource_packs": {
     "default": null,
     "worlds": {}
+  },
+  "backup": {
+    "targets": ["backups"]
   }
 }

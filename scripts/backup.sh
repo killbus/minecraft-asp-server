@@ -21,8 +21,6 @@
 #  window. Run while the server is stopped for a consistent snapshot.
 #
 #  Env overrides:
-#    BACKUP_TARGETS        replaces the target list below
-#    BACKUP_ROOT           same, kept for older callers (single target)
 #    KEEP                  complete backups kept per target (default 5)
 #    BACKUP_MIN_INTERVAL   skip when every target already has a complete
 #                          backup younger than this many minutes
@@ -35,30 +33,6 @@ set -eu
 cd "$(dirname "$0")"
 SCRIPT_DIR="$(pwd)"
 
-# ============================================================
-#  BACKUP TARGETS  (edit this block)
-# ============================================================
-#  One path per line, blank lines ignored. A relative path resolves
-#  against this script's directory; an absolute path is used as-is.
-#  Paths may contain spaces.
-#
-#      ../backups
-#      /mnt/usb/paper-backups
-#
-#  The FIRST entry is the primary target: if it fails, the whole run
-#  fails. Every later entry is a mirror: a mirror failure prints a
-#  warning but the run still succeeds, because an unplugged USB disk
-#  must not stop the local backup from being taken. Set
-#  BACKUP_REQUIRE_ALL=1 to make any mirror failure fatal.
-if [ -z "${BACKUP_TARGETS:-}" ]; then
-BACKUP_TARGETS='
-../backups
-'
-fi
-if [ -n "${BACKUP_ROOT:-}" ]; then
-    BACKUP_TARGETS="$BACKUP_ROOT"
-fi
-
 KEEP="${KEEP:-5}"
 if [ $# -ge 1 ]; then SERVER_DIR="$1"; else SERVER_DIR="$SCRIPT_DIR/../server"; fi
 MIN_INTERVAL="${BACKUP_MIN_INTERVAL:-0}"
@@ -66,6 +40,12 @@ REQUIRE_ALL="${BACKUP_REQUIRE_ALL:-0}"
 SETTINGS_DIR="${SETTINGS_DIR:-$SCRIPT_DIR/../settings}"
 TS="$(date -u +%Y%m%d-%H%M%S)"
 CURRENT_DEST=""
+CURRENT_TARGET=""
+
+remove_snapshot() {
+    python3 -B "$SCRIPT_DIR/backup_settings.py" --snapshot "$1" "$2" || return 1
+    rm -rf -- "$1/$2"
+}
 
 # Only directories named like our own timestamps are ever pruned, so a
 # target may point at a shared folder without us deleting its contents.
@@ -91,7 +71,7 @@ cleanup() {
     rc=$?
     if [ -n "$CURRENT_DEST" ] && [ -d "$CURRENT_DEST" ]; then
         echo "[backup] ERROR: aborted; removing $CURRENT_DEST" >&2
-        rm -rf "$CURRENT_DEST"
+        remove_snapshot "$CURRENT_TARGET" "$TS" || echo "[backup] ERROR: unsafe partial snapshot preserved" >&2
     fi
     exit "$rc"
 }
@@ -110,22 +90,11 @@ for reserved in config plugins settings; do
     fi
 done
 
-# Resolve the configured targets to absolute paths, one per line.
-TARGET_LIST="$(while read -r raw; do
-    [ -n "$raw" ] || continue
-    case "$raw" in
-        /*)              printf '%s\n' "$raw" ;;
-        [A-Za-z]:[\\/]*) printf '%s\n' "$raw" ;;
-        *)               printf '%s\n' "$SCRIPT_DIR/$raw" ;;
-    esac
-done <<TARGETS
-$BACKUP_TARGETS
-TARGETS
-)"
-if [ -z "$TARGET_LIST" ]; then
-    echo "[backup] ERROR: no backup targets configured (BACKUP_TARGETS is empty)" >&2
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[backup] ERROR: python3 is required for settings/minecraft-server.json" >&2
     exit 1
 fi
+TARGET_LIST="$(python3 -B "$SCRIPT_DIR/backup_settings.py" --format sh --server-dir "$SERVER_DIR" --settings-dir "$SETTINGS_DIR")" || exit 1
 
 # Refuse a torn snapshot: the Paper server must be stopped while we copy.
 # Match the real launch shape (`java ... -jar .../paper-server.jar`) so an
@@ -174,12 +143,14 @@ fi
 do_target() {
     tdir="$1"
     dest="$tdir/$TS"
-    CURRENT_DEST="$dest"
+    python3 -B "$SCRIPT_DIR/backup_settings.py" --snapshot "$tdir" "$TS" --new || return 1
 
-    if ! mkdir -p "$dest"; then
+    if ! mkdir -p "$tdir" || ! mkdir "$dest"; then
         echo "[backup] ERROR: cannot create $dest" >&2
         return 1
     fi
+    CURRENT_DEST="$dest"
+    CURRENT_TARGET="$tdir"
 
     for world_dir in "$SERVER_DIR"/*/; do
         [ -f "$world_dir/level.dat" ] || continue
@@ -282,6 +253,7 @@ do_target() {
         echo "[backup] ERROR: cannot write COMPLETE marker: $dest" >&2
         return 1
     }
+    CURRENT_DEST=""
 
     # --- prune THIS target: keep its newest $KEEP complete backups ---
     ls -1d "$tdir"/*/ 2>/dev/null | sort -r | {
@@ -290,12 +262,12 @@ do_target() {
             is_our_dir "$d" || continue
             if [ -f "$d/COMPLETE" ]; then
                 n=$((n + 1))
-                if [ "$n" -gt "$KEEP" ]; then rm -rf "$d"; fi
+                if [ "$n" -gt "$KEEP" ]; then remove_snapshot "$tdir" "$(basename "${d%/}")" || exit 1; fi
             else
-                rm -rf "$d"
+                remove_snapshot "$tdir" "$(basename "${d%/}")" || exit 1
             fi
         done
-    }
+    } || return 1
 
     CURRENT_DEST=""
     return 0
@@ -316,7 +288,10 @@ while IFS= read -r t; do
     else
         fail_count=$((fail_count + 1))
         if [ "$idx" -eq 1 ]; then primary_failed=1; fi
-        if [ -n "$t" ] && [ -d "$t/$TS" ]; then rm -rf "$t/$TS"; fi
+        if [ -n "$CURRENT_DEST" ] && [ -d "$CURRENT_DEST" ]; then
+            remove_snapshot "$CURRENT_TARGET" "$TS" || echo "[backup] ERROR: unsafe partial snapshot preserved" >&2
+        fi
+        CURRENT_DEST=""
         echo "[backup] ERROR: target failed: $t" >&2
     fi
 done <<TARGETS

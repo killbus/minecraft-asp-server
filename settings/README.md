@@ -15,9 +15,10 @@ python -B scripts/apply_config.py --settings settings/minecraft-server.json
 `settings/*.json` is gitignored except `*.example.json`. The normal host file is
 `settings/minecraft-server.json`: the renderer takes it explicitly with
 `--settings`, while direct launchers read its optional resource-pack section
-automatically. Alternative filenames remain supported by the renderer but are
-not startup inputs. Both consumers share `scripts/host_settings.py` for schema
-validation; the launcher never resolves unrelated credentials or reapplies configs.
+automatically. Backup scripts read the same fixed host file for destinations.
+Alternative filenames remain supported by the renderer but are not startup or
+backup inputs. Consumers share `scripts/host_settings.py` for schema validation;
+startup and backup never resolve unrelated credentials or reapply configs.
 
 Shape:
 
@@ -31,6 +32,9 @@ Shape:
   "resource_packs": {
     "default": null,
     "worlds": {}
+  },
+  "backup": {
+    "targets": ["backups"]
   }
 }
 ```
@@ -49,8 +53,9 @@ Rules:
   is the exception described below.
 - Keys inside `values` are placeholder names, not paths. A key that no template
   declares is refused, so a typo cannot sit silent.
-- The file requires `schema_version: 1` and `values`; `resource_packs` is optional.
-  Unknown fields, duplicate keys and malformed sections are rejected by both
+- The file requires `schema_version: 1` and `values`; `resource_packs` and `backup`
+  are optional to the shared schema. Backup execution requires `backup.targets`.
+  Unknown fields, duplicate keys and malformed sections are rejected by all
   consumers. Syntactically valid `env:` references are resolved only by the
   renderer, so starting with existing native config does not require those secrets.
 - This file is instance state, and the backup contract in
@@ -88,3 +93,20 @@ remain host-owned; the tool never migrates or deletes them automatically.
 
 See [SINGLE-WORLD-SOP.md](../docs/SINGLE-WORLD-SOP.md) for a per-save example and
 the read-only `select_resource_pack.py --world NAME --check` command.
+
+`backup` holds exactly `targets`, a nonempty array of destination paths. Relative
+paths resolve against the repository root: `"backups"` means `<repository>/backups`,
+not `scripts/backups`. Absolute paths and spaces are supported. The first target
+is primary and subsequent entries are mirrors. Backup-specific path validation
+runs only during backup; rendering settings does not inspect backup disks.
+The CMD entrypoint refuses paths containing `! % & ^ | < > ( ) "` before
+copying. Native Windows reserved names, stream paths and trailing-dot/space
+components are also rejected. Use `python -B scripts/backup_settings.py --format cmd` on Windows or
+`python3 -B scripts/backup_settings.py --format sh` on Linux to inspect resolved
+targets without writing a snapshot.
+
+Configure destinations here instead of editing `backup.sh` / `backup.cmd` or
+setting `BACKUP_ROOT` / `BACKUP_TARGETS`. Nonempty legacy destination variables
+produce a migration error. Missing host settings or a missing/empty target list
+also refuses backup; there is no implicit output directory. Existing retention,
+minimum-interval, mirror-failure and offline controls retain their behavior.

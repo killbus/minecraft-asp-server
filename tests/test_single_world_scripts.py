@@ -85,7 +85,8 @@ class SingleWorldScriptsTests(unittest.TestCase):
         self.scripts = self.directory / "scripts"
         self.scripts.mkdir()
         for name in ("start.sh", "start.cmd", "backup.sh", "backup.cmd", "backup-debug.cmd",
-                     "select_resource_pack.py", "host_settings.py", "verify_runtime.py"):
+                     "select_resource_pack.py", "host_settings.py", "verify_runtime.py",
+                     "backup_settings.py", "backup_cleanup.ps1"):
             target = self.scripts / name
             target.write_text((REPOSITORY / "scripts" / name).read_text(encoding="utf-8"),
                               encoding="utf-8", newline="\r\n" if name.endswith(".cmd") else "\n")
@@ -104,7 +105,7 @@ class SingleWorldScriptsTests(unittest.TestCase):
         self.elsewhere = self.directory / "elsewhere/nested"
         self.elsewhere.mkdir(parents=True)
         self.environment = dict(os.environ)
-        for name in ("BACKUP_TARGETS", "ASP_SKIP_BACKUP", "ALLOW_ONLINE", "WORLD_NAME",
+        for name in ("BACKUP_TARGETS", "BACKUP_ROOT", "SETTINGS_DIR", "ASP_SKIP_BACKUP", "ALLOW_ONLINE", "WORLD_NAME",
                      "PAUSE_ON_EXIT", "JAVA", "BACKUP_DEBUG"):
             self.environment.pop(name, None)
         self.environment.update(
@@ -112,7 +113,7 @@ class SingleWorldScriptsTests(unittest.TestCase):
             JAVA_CWD=str(self.directory / "java-cwd.txt"),
             JAVA_CALLS=str(self.directory / "java-calls.txt"),
             PROCESS_LOG=str(self.directory / "process.txt"), PROCESS_RESULT="0",
-            BACKUP_ROOT=str(self.backups), BACKUP_MIN_INTERVAL="0", KEEP="5",
+            BACKUP_MARKER=str(self.backups) + ".called", BACKUP_MIN_INTERVAL="0", KEEP="5",
             BACKUP_REQUIRE_ALL="1", REAL_POWERSHELL=self.powershell or "",
         )
 
@@ -140,11 +141,10 @@ class SingleWorldScriptsTests(unittest.TestCase):
                 encoding="utf-8", newline="\n")
             process.chmod(0o755)
             self.environment["JAVA"] = java.as_posix()
-            self.environment["BACKUP_ROOT"] = self.backups.as_posix()
             self.environment["PATH"] = str(self.bin) + os.pathsep + self.environment["PATH"]
             if stub_backup:
                 (self.scripts / "backup.sh").write_text(
-                    '#!/bin/sh\nprintf "backup\\n" > "$BACKUP_ROOT.called"\n',
+                    '#!/bin/sh\nprintf "backup\\n" > "$BACKUP_MARKER"\n',
                     encoding="utf-8", newline="\n")
         else:
             if os.name != "nt":
@@ -153,7 +153,7 @@ class SingleWorldScriptsTests(unittest.TestCase):
             self.environment["PATH"] = str(self.tools) + os.pathsep + self.environment["PATH"]
             if stub_backup:
                 (self.scripts / "backup.cmd").write_text(
-                    '@echo off\n> "%BACKUP_ROOT%.called" echo backup\nexit /b 0\n',
+                    '@echo off\n> "%BACKUP_MARKER%" echo backup\nexit /b 0\n',
                     encoding="utf-8", newline="\r\n")
 
     def run_script(self, name, *arguments):
@@ -459,6 +459,10 @@ class SingleWorldScriptsTests(unittest.TestCase):
         settings.mkdir()
         (settings / "host.json").write_bytes(b'{"schema_version":1,"values":{"PACK_URL":""}}')
         (settings / "host.example.json").write_bytes(b"example")
+        (settings / "minecraft-server.json").write_text(json.dumps({
+            "schema_version": 1, "values": {"MANAGEMENT_SERVER_SECRET": "env:UNSET_BACKUP_SECRET"},
+            "backup": {"targets": ["backups"]},
+        }), encoding="utf-8")
         self.environment["SETTINGS_DIR"] = settings.as_posix()
         result = self.run_script(entrypoint, self.server.as_posix())
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
@@ -502,6 +506,7 @@ class SingleWorldScriptsTests(unittest.TestCase):
 
     def check_online_refusal(self, shell):
         self.prepare(shell)
+        self.write_backup_settings(["backups"])
         self.environment["PROCESS_RESULT"] = "2"
         result = self.run_script(f"backup.{shell}", str(self.server))
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
@@ -513,6 +518,183 @@ class SingleWorldScriptsTests(unittest.TestCase):
 
     def test_cmd_backup_refuses_running_paper(self):
         self.check_online_refusal("cmd")
+
+    def write_backup_settings(self, targets):
+        settings = self.directory / "settings"
+        settings.mkdir(exist_ok=True)
+        path = settings / "minecraft-server.json"
+        path.write_text(json.dumps({"schema_version": 1,
+                                   "values": {"SECRET": "env:UNSET_BACKUP_SECRET"},
+                                   "backup": {"targets": targets}}), encoding="utf-8")
+        return path
+
+    def check_backup_destinations(self, shell):
+        self.prepare(shell)
+        primary = self.directory / "primary backups"
+        mirror = self.directory / "other disk/mirror backups"
+        self.write_backup_settings(["primary backups", str(mirror)])
+        for target in (primary, mirror):
+            for stamp in ("20000101-000001", "20000101-000002", "20000101-000003"):
+                directory = target / stamp
+                directory.mkdir(parents=True)
+                (directory / "old.txt").write_text("old snapshot")
+                if stamp != "20000101-000003":
+                    (directory / "COMPLETE").write_text("")
+            (target / "unrelated").mkdir()
+            (target / "unrelated/keep.txt").write_text("keep")
+        self.environment["KEEP"] = "2"
+        result = self.run_script(f"backup.{shell}")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for target in (primary, mirror):
+            complete = list(target.glob("*/COMPLETE"))
+            self.assertEqual(2, len(complete))
+            self.assertFalse((target / "20000101-000001").exists())
+            self.assertFalse((target / "20000101-000003").exists())
+            self.assertEqual("keep", (target / "unrelated/keep.txt").read_text())
+            current = next(marker.parent for marker in complete if marker.parent.name != "20000101-000002")
+            self.assertEqual((self.server / "Adventure_A/level.dat").read_bytes(),
+                             (current / "Adventure_A/level.dat").read_bytes())
+            self.assertIn("./settings/minecraft-server.json", (current / "MANIFEST.txt").read_text())
+        before = {str(path): path.read_bytes() for target in (primary, mirror)
+                  for path in target.rglob("*") if path.is_file()}
+        self.environment["BACKUP_MIN_INTERVAL"] = "60"
+        result = self.run_script(f"backup.{shell}")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("SKIP", result.stdout)
+        self.assertEqual(before, {str(path): path.read_bytes() for target in (primary, mirror)
+                                  for path in target.rglob("*") if path.is_file()})
+
+    def test_shell_configured_destinations_mirror_retention_and_interval(self):
+        self.check_backup_destinations("sh")
+
+    def test_cmd_configured_destinations_mirror_retention_and_interval(self):
+        self.check_backup_destinations("cmd")
+
+    def check_backup_missing_and_legacy_settings(self, shell):
+        self.prepare(shell)
+        result = self.run_script(f"backup.{shell}")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("settings", result.stdout + result.stderr)
+        self.assertFalse(self.backups.exists())
+        path = self.write_backup_settings(["backups"])
+        for name in ("BACKUP_ROOT", "BACKUP_TARGETS"):
+            self.environment[name] = str(self.backups)
+            result = self.run_script(f"backup.{shell}")
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("move destinations into backup.targets", result.stdout + result.stderr)
+            self.assertFalse(self.backups.exists())
+            del self.environment[name]
+        path.write_text('{"schema_version":1,"values":{}}', encoding="utf-8")
+        result = self.run_script(f"backup.{shell}")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("configure backup.targets", result.stdout + result.stderr)
+        self.assertFalse(self.backups.exists())
+
+    def test_shell_backup_requires_configured_destinations(self):
+        self.check_backup_missing_and_legacy_settings("sh")
+
+    def test_cmd_backup_requires_configured_destinations(self):
+        self.check_backup_missing_and_legacy_settings("cmd")
+
+    def check_backup_unsafe_destinations(self, shell):
+        self.prepare(shell)
+        (self.directory / "target-file").write_text("keep")
+        for targets in (["backups", "backups/nested"], ["backups", "./backups"],
+                        ["backups", "server/snapshot"], ["backups", "settings/snapshot"],
+                        ["backups", "target-file"]):
+            self.write_backup_settings(targets)
+            result = self.run_script(f"backup.{shell}")
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertFalse(self.backups.exists())
+            self.assertEqual("keep", (self.directory / "target-file").read_text())
+
+    def test_shell_validates_all_destinations_before_first_copy(self):
+        self.check_backup_unsafe_destinations("sh")
+
+    def test_cmd_validates_all_destinations_before_first_copy(self):
+        self.check_backup_unsafe_destinations("cmd")
+
+    def test_cmd_refuses_destination_metacharacters_before_copy(self):
+        self.prepare("cmd")
+        for character in "!%&^|<>()\"":
+            with self.subTest(character=character):
+                self.write_backup_settings(["backups", "unsafe" + character + "target"])
+                result = self.run_script("backup.cmd")
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertIn("CMD backup paths cannot contain", result.stdout + result.stderr)
+                self.assertFalse(self.backups.exists())
+
+    def test_shell_destination_metacharacters_remain_literal_data(self):
+        self.prepare("sh")
+        name = "literal !%&;$(touch injected) ' path"
+        self.write_backup_settings([name])
+        result = self.run_script("backup.sh")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        complete = list((self.directory / name).glob("*/COMPLETE"))
+        self.assertEqual(1, len(complete))
+        self.assertFalse((self.elsewhere / "injected").exists())
+        self.assertFalse((self.scripts / "injected").exists())
+
+    def check_backup_preserves_complete_snapshot_when_prune_refuses_link(self, shell):
+        self.prepare(shell)
+        self.write_backup_settings(["backups"])
+        old = self.backups / "20000101-000000"
+        old.mkdir(parents=True)
+        outside = self.directory / "outside"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("keep")
+        try:
+            (old / "unsafe-link").symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"symlinks unavailable: {error}")
+        result = self.run_script(f"backup.{shell}")
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertEqual("keep", (outside / "keep.txt").read_text())
+        self.assertTrue((old / "unsafe-link").is_symlink())
+        complete = list(self.backups.glob("*/COMPLETE"))
+        self.assertEqual(1, len(complete))
+        self.assertEqual((self.server / "Adventure_A/level.dat").read_bytes(),
+                         (complete[0].parent / "Adventure_A/level.dat").read_bytes())
+
+    def test_shell_cleanup_preserves_external_and_complete_data(self):
+        self.check_backup_preserves_complete_snapshot_when_prune_refuses_link("sh")
+
+    def test_cmd_cleanup_preserves_external_and_complete_data(self):
+        self.check_backup_preserves_complete_snapshot_when_prune_refuses_link("cmd")
+
+    def test_windows_cleanup_refuses_destination_outside_target(self):
+        if os.name != "nt":
+            self.skipTest("Windows PowerShell cleanup is available only on Windows")
+        self.backups.mkdir()
+        outside = self.directory / "20000101-000000"
+        outside.mkdir()
+        (outside / "keep.txt").write_text("keep")
+        result = subprocess.run(
+            [self.powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+             str(self.scripts / "backup_cleanup.ps1"), "-Action", "remove"],
+            env=dict(self.environment, TDIR=str(self.backups), DEST=str(outside)),
+            capture_output=True, text=True, timeout=20, check=False)
+        self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertIn("escaped its target", result.stderr)
+        self.assertEqual("keep", (outside / "keep.txt").read_text())
+
+    def check_native_invalid_backup_destination(self, shell):
+        if os.name != "nt":
+            self.skipTest("Windows native path rules")
+        self.prepare(shell)
+        for target in ("COM1", "bad:stream", "trailing."):
+            with self.subTest(target=target):
+                self.write_backup_settings(["backups", target])
+                result = self.run_script(f"backup.{shell}")
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertIn("invalid Windows path component", result.stdout + result.stderr)
+                self.assertFalse(self.backups.exists())
+
+    def test_cmd_refuses_native_invalid_destination_before_first_copy(self):
+        self.check_native_invalid_backup_destination("cmd")
+
+    def test_windows_bash_refuses_native_invalid_destination_before_first_copy(self):
+        self.check_native_invalid_backup_destination("sh")
 
 
 if __name__ == "__main__":

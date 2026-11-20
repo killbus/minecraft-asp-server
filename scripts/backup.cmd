@@ -21,8 +21,6 @@ REM  leftovers, so a failed run can never push a good backup out of the
 REM  window. Run while the server is stopped for a consistent snapshot.
 REM
 REM  Env overrides:
-REM    BACKUP_TARGETS        replaces the target list below
-REM    BACKUP_ROOT           same, kept for older callers (single target)
 REM    KEEP                  complete backups kept per target (default 5)
 REM    BACKUP_MIN_INTERVAL   skip when every target already has a complete
 REM                          backup younger than this many minutes
@@ -31,25 +29,9 @@ REM    SETTINGS_DIR          per-host settings source (default ..\settings)
 REM    BACKUP_REQUIRE_ALL=1  a failed mirror fails the run (default 0)
 REM    ALLOW_ONLINE=1        proceed even though the server is running
 REM ============================================================
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions DisableDelayedExpansion
+set "SCRIPT_DIR=%~dp0"
 cd /d "%~dp0"
-
-REM ============================================================
-REM  BACKUP TARGETS  (edit this block)
-REM ============================================================
-REM  Semicolon-separated list, e.g.
-REM      ..\backups;E:\MC-Backups
-REM  A relative path resolves against this script's directory; an
-REM  absolute path (D:\..., \\server\share) is used as-is. Paths may
-REM  contain spaces, but not semicolons.
-REM
-REM  The FIRST entry is the primary target: if it fails, the whole run
-REM  fails. Every later entry is a mirror: a mirror failure prints a
-REM  warning but the run still succeeds, because an unplugged USB disk
-REM  must not stop the local backup from being taken. Set
-REM  BACKUP_REQUIRE_ALL=1 to make any mirror failure fatal.
-if not defined BACKUP_TARGETS set "BACKUP_TARGETS=..\backups"
-if defined BACKUP_ROOT set "BACKUP_TARGETS=%BACKUP_ROOT%"
 
 if not defined KEEP set "KEEP=5"
 if not defined BACKUP_MIN_INTERVAL set "BACKUP_MIN_INTERVAL=0"
@@ -77,34 +59,22 @@ for %%d in (config plugins settings) do if exist "%SERVER_DIR%\%%d\level.dat" (
     goto :finish
 )
 
-REM --- resolve the target list into TGT_1 .. TGT_N ---
-REM `for /f` with delims=; keeps spaces inside a path; the second loop
-REM only trims the leading space people habitually put after the ';'.
-set "TGT_N=0"
-set "REST=%BACKUP_TARGETS%"
-:parse_next
-if not defined REST goto :parse_done
-set "T="
-set "NEXT="
-for /f "tokens=1* delims=;" %%a in ("%REST%") do (
-    set "T=%%a"
-    set "NEXT=%%b"
+where python >nul 2>nul
+if errorlevel 1 (
+    echo [backup] ERROR: python is required for settings\minecraft-server.json
+    goto :finish
 )
-set "REST=%NEXT%"
-if not defined T goto :parse_next
-for /f "tokens=* delims= " %%p in ("%T%") do set "T=%%p"
-if not defined T goto :parse_next
-if "%T:~0,2%"=="\\" goto :parse_abs
-if "%T:~1,1%"==":" goto :parse_abs
-set "T=%~dp0%T%"
-:parse_abs
-set /a TGT_N+=1
-set "TGT_!TGT_N!=%T%"
-goto :parse_next
-:parse_done
+python -B "%SCRIPT_DIR%backup_settings.py" --format cmd --server-dir "%SERVER_DIR%" --settings-dir "%SETTINGS_DIR%" >nul
+if errorlevel 1 goto :finish
+setlocal EnableDelayedExpansion
+set "TGT_N=0"
+for /f "usebackq delims=" %%a in (`python -B "%SCRIPT_DIR%backup_settings.py" --format cmd --server-dir "%SERVER_DIR%" --settings-dir "%SETTINGS_DIR%"`) do (
+    set /a TGT_N+=1
+    set "TGT_!TGT_N!=%%a"
+)
 
 if %TGT_N% equ 0 (
-    echo [backup] ERROR: no backup targets configured ^(BACKUP_TARGETS is empty^)
+    echo [backup] ERROR: no validated backup.targets were returned
     goto :finish
 )
 
@@ -153,7 +123,6 @@ for /l %%i in (1,1,%TGT_N%) do (
     ) else (
         set /a bad+=1
         if %%i equ 1 set /a primary_failed=1
-        if exist "!TGT_%%i!\%TS%" rmdir /s /q "!TGT_%%i!\%TS%"
         echo [backup] ERROR: target failed: !TGT_%%i!
     )
 )
@@ -200,10 +169,17 @@ setlocal EnableDelayedExpansion
 set "TDIR=%~1"
 set "DEST=%TDIR%\%TS%"
 set "ERRMSG="
+set "CREATED_DEST="
+
+python -B "%SCRIPT_DIR%backup_settings.py" --snapshot "%TDIR%" "%TS%" --new
+if errorlevel 1 set "ERRMSG=unsafe or existing snapshot destination"
+if defined ERRMSG goto :dt_fail
 
 mkdir "%DEST%" 2>nul
+if errorlevel 1 set "ERRMSG=cannot create a new snapshot directory"
 if not exist "%DEST%" set "ERRMSG=cannot create %DEST%"
 if defined ERRMSG goto :dt_fail
+set "CREATED_DEST=1"
 
 for /d %%w in ("%SERVER_DIR%\*") do if exist "%%w\level.dat" if not exist "%%w\level.dat\" (
     robocopy "%%w" "%DEST%\%%~nxw" /MIR /XF session.lock level.dat_old /NFL /NDL /NJH /NJS /NP >nul
@@ -260,27 +236,18 @@ REM --- completion marker: written last, only for a fully written backup ---
 > "%DEST%\COMPLETE" echo %TS%
 if not exist "%DEST%\COMPLETE" set "ERRMSG=cannot write COMPLETE marker"
 if defined ERRMSG goto :dt_fail
+set "CREATED_DEST="
 
 REM --- prune THIS target: keep its newest %KEEP% complete backups ---
 REM Only directories named like our own timestamps are touched, so a
 REM target may point at a shared folder without us deleting its contents.
-set /a n=0
-for /f "delims=" %%d in ('dir /b /ad /o-n "%TDIR%" 2^>nul') do (
-    set "OURS="
-    echo %%d| findstr /r /c:"^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]$" >nul && set "OURS=1"
-    if defined OURS (
-        if exist "%TDIR%\%%d\COMPLETE" (
-            set /a n+=1
-            if !n! gtr %KEEP% rmdir /s /q "%TDIR%\%%d"
-        ) else (
-            rmdir /s /q "%TDIR%\%%d"
-        )
-    )
-)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%backup_cleanup.ps1" -Action prune
+if errorlevel 1 set "ERRMSG=backup pruning failed"
+if defined ERRMSG goto :dt_fail
 
 endlocal & exit /b 0
 
 :dt_fail
 echo [backup] ERROR: %ERRMSG%
-rmdir /s /q "%DEST%" 2>nul
+if defined CREATED_DEST powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%backup_cleanup.ps1" -Action remove
 endlocal & exit /b 1

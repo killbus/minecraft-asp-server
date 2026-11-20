@@ -73,6 +73,9 @@ Settings shape, also optional:
   "resource_packs": {
     "default": null,
     "worlds": {}
+  },
+  "backup": {
+    "targets": ["backups"]
   }
 }
 ```
@@ -82,9 +85,13 @@ hosts. It is named after the host and passed explicitly with `--settings`;
 the renderer never discovers host settings implicitly. Direct launchers read
 fixed `settings/minecraft-server.json` for its optional `resource_packs` section,
 as specified in `single-world-start.md`. `scripts/host_settings.py` owns common
-JSON/schema validation and raw value/reference validation for both consumers.
+JSON/schema validation and raw value/reference validation for all consumers.
 Only the renderer resolves `values` env references. Startup must not require
 unrelated deployment secrets. Other renderer filenames are not startup inputs.
+Backup also reads the fixed host file and consumes only `backup.targets` without
+resolving credentials. Shared decoding checks backup shape and path-string syntax;
+only the backup consumer performs destination filesystem checks. Rendering or
+pack selection must not require backup disks to be accessible.
 Host coordinates live outside `config/`, because
 `config/` is a byte-for-byte mirror of `server/` and a settings file has no
 destination path.
@@ -96,10 +103,15 @@ deployment. That untracked-ness makes the file instance state: it is part of
 the server snapshot described in `docs/SINGLE-WORLD-SOP.md`, and that
 snapshot's copy is restored only onto the host it came from.
 
-The file requires `schema_version` and `values`, with optional `resource_packs`.
+The file requires `schema_version` and `values`, with optional `resource_packs`
+and `backup`.
 No other keys are accepted. `resource_packs` has exactly `default` and `worlds`;
 each descriptor is null or exactly `{url, sha1}`, with a valid public HTTPS or
 loopback HTTP URL and 40-hex SHA-1. See the startup spec for selection semantics.
+`backup` has exactly `targets`, a nonempty array of nonblank literal path strings
+without controls or template/environment references. Relative targets are
+repository-root-relative. Absence is compatible with rendering/startup but
+refused by backup execution. See the snapshot contract for target safety.
 `values` keys
 are placeholder names, not paths. A key no template declares is refused, so a
 typo cannot sit silent. A credential is never a literal: it is written
@@ -191,8 +203,10 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 | Settings file absent or unreadable | `ERROR: cannot read settings ...`, exit 2 |
 | Settings JSON is malformed or a key repeats | `ERROR: settings are not valid JSON ...`, exit 2 |
 | Settings lack `schema_version: 1` or a `values` object | `ERROR: settings must ...`, exit 2 |
-| Settings hold a key other than `schema_version`/`values`/`resource_packs` | `ERROR: settings hold an unknown key ...`, exit 2 |
+| Settings hold a key other than `schema_version`/`values`/`resource_packs`/`backup` | `ERROR: settings hold an unknown key ...`, exit 2 |
 | Invalid resource_packs section | Refuse before rendering/writing |
+| Invalid backup section | Refuse before rendering/writing |
+| Valid backup section | Render values without consuming or inspecting destinations |
 | resource_packs exists, PACK_URL omitted or set by host/environment | Render empty canonical native pack |
 | resource_packs exists, nonempty explicit --set PACK_URL | Refuse conflicting ownership |
 | Settings value is blank other than exact empty `PACK_URL`, or holds `${` | `ERROR: settings value ...`, exit 2 |
@@ -258,6 +272,8 @@ difference, `2` = refused, nothing written. Errors go to stderr as
 - policy clears native PACK_URL even if omitted or populated in values/env;
   unused legacy env reference is not resolved; conflicting CLI override refused
 - unknown/malformed resource_packs fields refused consistently by both consumers
+- backup shape rejected consistently; valid backup targets remain inert during
+  rendering and pack selection, including an unavailable destination disk
 - named-save manifest injection and native save/configuration root collision refusal
 - backup snapshots `settings/*.json`, omits `*.example.json`, and lists the
   copied file in `MANIFEST.txt`

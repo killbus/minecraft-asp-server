@@ -380,6 +380,42 @@ launcher while the scene still owns Paper.
 
 ## Backups and restore
 
+Add a `backup` member alongside `values` and `resource_packs` in the existing
+`settings/minecraft-server.json`:
+
+```json
+"backup": {
+  "targets": ["backups"]
+}
+```
+
+Targets are resolved from the repository root, independent of the calling
+directory; `"backups"` selects `<repository>/backups`. Absolute paths and spaces
+are supported. Add further paths to the array for independent mirrors. The
+first target is primary: its failure fails the backup. A later mirror failure
+warns unless `BACKUP_REQUIRE_ALL=1` requires every copy to succeed.
+
+The scripts read this fixed host file using Python 3, without resolving
+deployment credentials. The destination list is no longer defined in scripts.
+Move old `BACKUP_ROOT` / `BACKUP_TARGETS` values into this array and remove those
+environment overrides; nonempty legacy overrides are refused with migration
+guidance. Old script-relative `../backups` becomes repository-relative `backups`.
+Missing settings or `backup.targets` refuses backup instead of choosing a default.
+Paths overlapping snapshot sources, duplicate/nested targets, links/junctions
+and invalid destination types are rejected before copying or pruning.
+CMD backup paths containing `! % & ^ | < > ( ) "` are refused; choose a
+destination without those characters. This also applies to its source paths.
+Native Windows reserved names, alternate data streams and components ending in
+a dot or space are also refused. POSIX paths retain their native naming rules.
+
+Preview resolved targets without creating or pruning anything:
+
+```sh
+python3 -B scripts/backup_settings.py --format sh
+```
+
+On Windows, use `python -B scripts/backup_settings.py --format cmd`.
+
 Pre-start backups retain the existing 60-minute minimum interval and retention
 policy. `ASP_SKIP_BACKUP=1` remains the compatibility override. To force a
 fresh pre-start copy, set `BACKUP_MIN_INTERVAL=0`. To back up while stopped:
@@ -391,6 +427,10 @@ scripts/backup.sh
 ```bat
 scripts\backup.cmd
 ```
+
+`KEEP` still defaults to five complete snapshots per target. The launcher keeps
+its existing warning-and-continue behavior if a pre-start backup fails; confirm
+a successful explicit backup before a deployment operation that needs one.
 
 Every top-level directory containing a `level.dat` file is copied under its
 original name, including inactive saves and any native sibling dimensions.

@@ -61,8 +61,9 @@ only forward the save name. Missing file or absent section keeps the prior nativ
 config path; only a missing file avoids the Python requirement. An invalid or
 unreadable document fails before Java/backup, never falling back silently.
 
-The root schema has `schema_version: 1`, required `values` and optional
-`resource_packs`. Its policy has exactly `default`, `worlds` (no nested version).
+The root schema has `schema_version: 1`, required `values`, optional
+`resource_packs` and optional `backup`. Resource-pack policy has exactly
+`default`, `worlds` (no nested version).
 A descriptor is null
 or exactly `{url, sha1}`. Null disables a pack; a missing named override inherits
 the default. Validate all save names and descriptors, unknown fields, duplicate
@@ -166,6 +167,62 @@ Host `settings/` enters snapshots except `*.example.json`; `SETTINGS_DIR`
 overrides that source. Regenerable pack files remain excluded. Native saves
 named `config`, `plugins` or `settings` collide with snapshot destinations and
 are refused before any copy rather than being merged with unrelated state.
+
+### Configured backup destinations
+
+Destination ownership is fixed `settings/minecraft-server.json` with optional
+host member `backup: {"targets": ["backups"]}`. The common decoder validates
+shape; backup requires this member and resolves relative paths against repository
+root, never against caller cwd or scripts/. Absolute paths and spaces are
+supported. Missing settings/section and nonempty legacy `BACKUP_ROOT` or
+`BACKUP_TARGETS` refuse with migration guidance before any destination mutation.
+No default destination remains in either shell script. The example owns the
+initial suggestion `backups`; an existing host file is never overwritten.
+
+`scripts/backup_settings.py` is the backup-specific path consumer. It validates
+the entire target set before emitting any paths; outputs are data, never shell
+code. Backup does not resolve deployment credential references. Renderer and
+pack selection validate schema only and do not inspect backup disks. Retain
+`SETTINGS_DIR` as the snapshot-source override, not a second policy owner.
+
+```text
+python -B scripts/backup_settings.py --format sh|cmd [--server-dir PATH] [--settings-dir PATH]
+python -B scripts/backup_settings.py --snapshot TARGET TIMESTAMP [--new]
+```
+
+Normal mode prints absolute paths only after validation and does not mutate
+files. Exit 0 succeeds; exit 2 refuses. Snapshot mode validates containment,
+timestamp syntax and destructive-path safety; `--new` also refuses an existing
+timestamp directory. CMD paths refuse `! % & ^ | < > ( ) "` before use in batch
+expansion. A small `backup_cleanup.ps1` owns native Windows cleanup/pruning.
+On Windows (including Git Bash), reject native reserved device names, stream
+components and trailing dot/space aliases before any copy. Do not apply those
+native Windows restrictions to POSIX paths. Check lexical ancestors before
+normalizing `..`, so a link followed by `..` cannot hide traversal.
+
+Refuse overlapping source/target paths, duplicates, nested targets, existing
+non-directory targets and links/junctions. Validate canonical containment before
+each recursive cleanup/prune; never follow a linked timestamp child or delete
+unrelated directories. Windows recursive deletion stays within one shell with
+literal paths. Do not feed PowerShell-enumerated paths to CMD for deletion.
+
+The first entry is primary and its failure fails the backup. Other copies are
+independent mirrors, warning by default or fatal with BACKUP_REQUIRE_ALL=1.
+Existing KEEP=5, manual minimum interval=0, pre-start minimum interval=60,
+ALLOW_ONLINE, manifest/COMPLETE markers, cache exclusions and debug-wrapper
+behavior remain. Startup still warns and continues after a backup failure;
+this change does not introduce a new startup failure policy.
+
+Good: `targets: ["backups", "/mnt/backup/minecraft"]` on a matching Linux host.
+Base: the example's single repository-relative target. Bad: `targets: ["server"]`
+or a child of a save, or a legacy environment override alongside the host policy.
+Wrong: edit each platform script to name a host disk. Correct: update the ignored
+host document and back it up with the server.
+
+Regression assertions cover both entrypoints from unrelated cwd, absolute and
+relative paths with spaces, no writes on malformed/overlapping/legacy inputs,
+independent mirrors and failures, retention of complete snapshots, containment
+of cleanup, and shared-schema acceptance by renderer/resource-pack consumers.
 
 ## Executable checks
 

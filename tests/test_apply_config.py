@@ -708,6 +708,7 @@ class RepositoryConfigTests(unittest.TestCase):
                             "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET",
                         },
                         "resource_packs": {"default": None, "worlds": {}},
+                        "backup": {"targets": ["unavailable-backup-mount/snapshots"]},
                     }
                 ),
                 encoding="utf-8",

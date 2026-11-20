@@ -83,7 +83,7 @@ def read_host_settings(path):
         raise VerificationError(f"settings are not valid JSON: {error}") from error
     if not isinstance(settings, dict):
         raise VerificationError("settings must be a JSON object")
-    unknown = sorted(set(settings) - {"schema_version", "values", "resource_packs"})
+    unknown = sorted(set(settings) - {"schema_version", "values", "resource_packs", "backup"})
     if unknown:
         raise VerificationError(f"settings hold an unknown key {unknown[0]!r}")
     if type(settings.get("schema_version")) is not int or settings["schema_version"] != 1:
@@ -104,4 +104,16 @@ def read_host_settings(path):
             raise VerificationError(f"settings value {name} must be {ENV_REFERENCE}NAME")
     if "resource_packs" in settings:
         validate_resource_packs(settings["resource_packs"])
+    if "backup" in settings:
+        backup = settings["backup"]
+        if not isinstance(backup, dict) or set(backup) != {"targets"}:
+            raise VerificationError("backup must contain exactly targets")
+        if not isinstance(backup["targets"], list) or not backup["targets"]:
+            raise VerificationError("backup targets must be a nonempty array")
+        for target in backup["targets"]:
+            require_text(target, "backup target")
+            if any(ord(character) == 127 for character in target):
+                raise VerificationError("backup targets must not contain control characters")
+            if target.startswith("env:") or "${" in target:
+                raise VerificationError("backup targets must be literal paths, not environment references")
     return settings

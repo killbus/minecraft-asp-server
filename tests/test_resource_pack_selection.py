@@ -41,6 +41,7 @@ class ResourcePackSelectionTests(unittest.TestCase):
 
     def write_policy(self, default=None, worlds=None):
         policy = {"schema_version": 1, "values": {},
+                  "backup": {"targets": ["unavailable-backup-mount/snapshots"]},
                   "resource_packs": {"default": default, "worlds": worlds or {}}}
         self.policy.write_text(json.dumps(policy), encoding="utf-8")
 
