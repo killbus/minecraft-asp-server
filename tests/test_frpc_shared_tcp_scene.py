@@ -11,8 +11,9 @@ import shutil
 import shlex
 import socket
 import subprocess
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,14 +29,27 @@ MUX_BEDROCK = "    server geyser 127.0.0.1:19132"
 MUX_JAVA = "    server paper 127.0.0.1:25565"
 MUX_LISTEN_PLAIN = "    bind 127.0.0.1:25566"
 MUX_JAVA_PROXY = "    server paper 127.0.0.1:25565 send-proxy-v2"
+PACKS_ACL = '    acl is_packs payload(0,11) -m beg "GET /packs/"'
+PACKS_USE = "    use_backend packs if is_packs"
+PACKS_BACKEND = "    server packs 127.0.0.1:8000"
 
 
 @unittest.skipIf(SH is None, "POSIX sh is not available")
 class SharedTcpSceneTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = self.enterContext(scratch.directory("frpc-shared-scene-"))
+        self.runtime = self.directory / "runtime"
+        scenes = self.runtime / "scripts" / "scenes"
+        scenes.mkdir(parents=True)
+        for name in ("frpc.sh", "frpc-shared-tcp.sh"):
+            destination = scenes / name
+            destination.write_text(
+                (ROOT / "scripts" / "scenes" / name).read_text(encoding="utf-8"),
+                encoding="utf-8", newline="\n",
+            )
+            destination.chmod(0o755)
+        self.scene = scenes / "frpc-shared-tcp.sh"
+        (self.runtime / "server" / "packs").mkdir(parents=True)
         self.configs = self.directory / "configs"
         self.configs.mkdir()
         (self.configs / "frpc.toml").write_text("serverAddr = 'example.org'\n", encoding="utf-8")
@@ -84,8 +98,8 @@ class SharedTcpSceneTests(unittest.TestCase):
         environment = dict(os.environ)
         environment.update(env or {})
         return subprocess.run(
-            [SH, SCENE.as_posix(), "up", "--config", self.configs.as_posix(), *arguments],
-            cwd=ROOT, capture_output=True, text=True, env=environment,
+            [SH, self.scene.as_posix(), "up", "--config", self.configs.as_posix(), *arguments],
+            cwd=self.runtime, capture_output=True, text=True, env=environment,
         )
 
     def manifest(self, text, name="the.scene"):
@@ -96,8 +110,8 @@ class SharedTcpSceneTests(unittest.TestCase):
 
     def run_manifest(self, scene, *arguments):
         return subprocess.run(
-            [SH, SCENE.as_posix(), "up", "--scene", scene.as_posix(), *arguments],
-            cwd=ROOT, capture_output=True, text=True,
+            [SH, self.scene.as_posix(), "up", "--scene", scene.as_posix(), *arguments],
+            cwd=self.runtime, capture_output=True, text=True,
         )
 
     def executable(self, directory, name, text):
@@ -127,6 +141,15 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
         return result.stderr
 
+    def posix_path(self, path):
+        """The absolute path form the scene's `pwd -P` writes into the config."""
+        result = subprocess.run(
+            [SH, "-c", 'cd "$1" && pwd -P', "sh", path.parent.as_posix()],
+            cwd=self.runtime, capture_output=True, text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        return result.stdout.strip() + "/" + path.name
+
     def test_plain_config_demuxes_only(self):
         config = self.config()
         self.assertIn("    mode tcp", config)
@@ -134,7 +157,7 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertIn(MUX_BEDROCK, config)
         self.assertIn(MUX_JAVA, config)
         self.assertIn("    default_backend java", config)
-        self.assertNotIn("geyser_tls", "\n".join(config))
+        self.assertNotIn("tls_terminat", "\n".join(config))
 
     def test_a_scene_and_configs_are_mutually_exclusive(self):
         scene = self.manifest(
@@ -144,9 +167,9 @@ class SharedTcpSceneTests(unittest.TestCase):
         )
 
         result = subprocess.run(
-            [SH, SCENE.as_posix(), "up", "--scene", scene.as_posix(),
+            [SH, self.scene.as_posix(), "up", "--scene", scene.as_posix(),
              "--config", self.configs.as_posix(), "--dry-run"],
-            cwd=ROOT, capture_output=True, text=True,
+            cwd=self.runtime, capture_output=True, text=True,
         )
 
         self.assertEqual(2, result.returncode, result.stdout)
@@ -210,11 +233,11 @@ class SharedTcpSceneTests(unittest.TestCase):
         })
         result = subprocess.run(
             [
-                SH, SCENE.as_posix(), "up", "--scene", scene.as_posix(),
+                SH, self.scene.as_posix(), "up", "--scene", scene.as_posix(),
                 "--haproxy-config", haproxy_config.as_posix(),
                 "--listen", f"127.0.0.1:{port}",
             ],
-            cwd=ROOT, capture_output=True, text=True, env=environment,
+            cwd=self.runtime, capture_output=True, text=True, env=environment,
         )
 
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
@@ -252,7 +275,7 @@ class SharedTcpSceneTests(unittest.TestCase):
         # loopback) and the signalling split is unchanged.
         self.assertIn("    bind 127.0.0.1:25566 accept-proxy", config)
         self.assertIn(MUX_JAVA_PROXY, config)
-        self.assertIn("    use_backend geyser_tls if is_tls", config)
+        self.assertIn("    use_backend tls_termination if is_tls", config)
         self.assertIn("    use_backend geyser_signaling if is_http", config)
         listener = [line for line in config if line.startswith("    bind 127.0.0.1:25567 ssl crt ")]
         self.assertEqual(1, len(listener), config)
@@ -339,6 +362,302 @@ class SharedTcpSceneTests(unittest.TestCase):
 
         self.assertIn("--tls-listen must differ from MUX_LAN_JAVA", errors)
 
+    def test_packs_adds_a_payload_acl_and_a_tcp_backend(self):
+        config = self.config("--packs", "127.0.0.1:8000")
+        text = "\n".join(config)
+
+        self.assertIn(PACKS_ACL, config)
+        self.assertIn(PACKS_USE, config)
+        self.assertIn("backend packs", config)
+        self.assertIn(PACKS_BACKEND, config)
+        # The route is one more TCP branch: no HTTP parsing anywhere.
+        self.assertIn("    mode tcp", config)
+        self.assertNotIn("mode http", text)
+
+    def test_packs_acl_follows_the_java_acls_and_switches_before_geyser(self):
+        config = self.config("--packs", "127.0.0.1:8000")
+
+        self.assertLess(config.index("    acl is_java payload(1,1) -m bin 00"),
+                        config.index(PACKS_ACL))
+        self.assertLess(config.index(PACKS_ACL),
+                        config.index("    tcp-request inspect-delay 3s"))
+        # A pack GET also matches is_http, so the packs rule has to win first.
+        self.assertLess(config.index(PACKS_USE),
+                        config.index("    use_backend geyser_signaling if is_tls or is_http"))
+        self.assertLess(config.index(PACKS_USE),
+                        config.index("    default_backend java"))
+
+    def test_packs_with_a_certificate_rides_the_terminating_frontend(self):
+        certificate = self.pem("certs/site.pem")
+
+        config = self.config(
+            "--tls-cert", certificate.as_posix(),
+            "--packs", "127.0.0.1:8000",
+        )
+
+        # A ClientHello cannot be read as a payload match, so with TLS the
+        # route is not on the shared frontend; it is on the terminating one,
+        # where the decrypted request line is what the ACL reads.
+        shared = config[: config.index("frontend tls_terminated")]
+        self.assertNotIn("is_packs", shared)
+        self.assertNotIn("mode http", "\n".join(config))
+        self.assertIn("    acl is_packs payload(0,11) -m beg \"GET /packs/\"", config)
+        self.assertIn("    use_backend tls_termination if is_tls", config)
+        self.assertIn("    use_backend geyser_signaling if is_http", config)
+        self.assertIn("backend tls_termination", config)
+        self.assertIn("    server termination 127.0.0.1:25567", config)
+        self.assertIn("frontend tls_terminated", config)
+        termination = config[config.index("frontend tls_terminated"):]
+        # In tcp mode the switching rules run at the accept event, with an
+        # empty payload buffer, unless tcp-request content accept delays them
+        # until the decrypted request line has arrived. The shared frontend
+        # has always carried that pair; the terminating one must too, or
+        # is_packs can never be true and every request falls to Geyser.
+        http_acl = '    acl is_http payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "'
+        self.assertIn(http_acl, termination)
+        self.assertIn("    tcp-request inspect-delay 3s", termination)
+        self.assertIn("    tcp-request content accept if is_http", termination)
+        self.assertLess(
+            termination.index(http_acl),
+            termination.index("    tcp-request content accept if is_http"),
+        )
+        self.assertLess(
+            termination.index("    tcp-request content accept if is_http"),
+            termination.index("    use_backend packs if is_packs"),
+        )
+        # The packs rule must decide before the remaining decrypted bytes go
+        # to the signalling backend, the same way it does on the shared port.
+        self.assertLess(
+            termination.index("    use_backend packs if is_packs"),
+            termination.index("    default_backend geyser_signaling"),
+        )
+        self.assertIn(PACKS_BACKEND, config)
+        listener = self.terminating_bind(config)
+        self.assertNotIn("accept-proxy", listener)
+
+    def test_packs_prefix_changes_the_match_and_its_length(self):
+        config = self.config(
+            "--packs", "127.0.0.1:8000",
+            env={"MUX_PACKS_PREFIX": "/resource-packs/"},
+        )
+
+        self.assertIn(
+            '    acl is_packs payload(0,20) -m beg "GET /resource-packs/"', config,
+        )
+        self.assertNotIn(PACKS_ACL, config)
+
+    def test_serve_packs_routes_to_the_backend_it_starts(self):
+        """The ACL and the window command come from one value, not two."""
+        config = self.config("--serve-packs")
+
+        self.assertEqual(self.config("--packs", "127.0.0.1:8000"), config)
+
+        output = self.run_scene("--dry-run", "--serve-packs").stdout
+        self.assertIn("-n packs", output)
+        self.assertIn("--bind '127.0.0.1'", output)
+        self.assertIn("--port 8000", output)
+        self.assertIn("--prefix /packs/", output)
+        # The pack server is part of the entry, so it starts before the Java
+        # server, the same way the sidecars and the mux do.
+        self.assertLess(output.index("-n packs"), output.index("bash scripts/start.sh"))
+
+    def test_serve_packs_takes_the_port_from_the_command_line(self):
+        config = self.config("--serve-packs", "--packs-port", "9100")
+
+        self.assertIn("    server packs 127.0.0.1:9100", config)
+        self.assertNotIn(PACKS_BACKEND, config)
+        output = self.run_scene("--dry-run", "--serve-packs", "--packs-port", "9100").stdout
+        self.assertIn("--port 9100", output)
+
+    def test_serve_packs_and_packs_are_mutually_exclusive(self):
+        for arguments in (
+            ("--serve-packs", "--packs", "127.0.0.1:8000"),
+            ("--packs", "127.0.0.1:8000", "--serve-packs"),
+        ):
+            with self.subTest(arguments=arguments):
+                errors = self.assert_rejected("--dry-run", *arguments)
+                self.assertIn("mutually exclusive", errors)
+
+    def test_packs_port_without_serve_packs_is_refused(self):
+        errors = self.assert_rejected(
+            "--dry-run", "--packs", "127.0.0.1:8000", "--packs-port", "9000",
+        )
+
+        self.assertIn("--packs-port needs --serve-packs", errors)
+
+    def test_serve_packs_refuses_a_bad_port(self):
+        errors = self.assert_rejected("--dry-run", "--serve-packs", "--packs-port", "eighty")
+
+        self.assertIn("--packs-port must be a whole number", errors)
+
+    def test_serve_packs_refuses_the_mux_listen_port(self):
+        errors = self.assert_rejected("--dry-run", "--serve-packs", "--packs-port", "25566")
+
+        self.assertIn("must differ from", errors)
+
+    def test_serve_packs_refuses_a_hand_written_haproxy_config(self):
+        haproxy_config = self.directory / "haproxy.cfg"
+        haproxy_config.write_text("# test config\n", encoding="utf-8")
+
+        errors = self.assert_rejected(
+            "--dry-run", "--serve-packs", "--haproxy-config", haproxy_config.as_posix(),
+        )
+
+        self.assertIn("cannot be combined with --haproxy-config", errors)
+
+    def test_tls_config_is_unchanged_without_packs(self):
+        certificate = self.pem("certs/site.pem")
+        resolved = self.posix_path(certificate)
+
+        self.assertEqual(
+            [
+                "# Java and Bedrock built-in signalling share this local TCP port.",
+                "global",
+                "    maxconn 4096",
+                "",
+                "defaults",
+                "    mode tcp",
+                "    timeout connect 5s",
+                "    timeout client 1h",
+                "    timeout server 1h",
+                "",
+                "frontend mc_shared",
+                MUX_LISTEN_PLAIN,
+                "    acl is_tls req.ssl_hello_type 1",
+                '    acl is_http payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "',
+                "    acl is_java payload(0,1) -m bin fe",
+                "    acl is_java payload(1,1) -m bin 00",
+                "    tcp-request inspect-delay 3s",
+                "    tcp-request content accept if is_tls or is_http or is_java",
+                "    use_backend tls_termination if is_tls",
+                "    use_backend geyser_signaling if is_http",
+                "    default_backend java",
+                "",
+                "backend geyser_signaling",
+                MUX_BEDROCK,
+                "",
+                "backend java",
+                MUX_JAVA,
+                "",
+                "# TLS is terminated here, not in Geyser: the decrypted stream reaches the",
+                "# same signalling backend byte for byte. The two names below describe the",
+                "# stage, not an owner - this half serves Java signalling and the pack route",
+                "# alike.",
+                "backend tls_termination",
+                "    server termination 127.0.0.1:25567",
+                "",
+                "frontend tls_terminated",
+                "    bind 127.0.0.1:25567 ssl crt " + resolved,
+                "    default_backend geyser_signaling",
+            ],
+            self.config("--tls-cert", certificate.as_posix()),
+        )
+
+    def test_packs_endpoint_must_be_an_endpoint(self):
+        errors = self.assert_rejected("--packs", "8000")
+
+        self.assertIn("HOST:PORT", errors)
+        self.assertIn("8000", errors)
+
+    def test_packs_may_not_collide_with_another_bind(self):
+        for endpoint in [
+            "127.0.0.1:25566",
+            "127.0.0.1:25565",
+            "127.0.0.1:19132",
+            "127.0.0.1:25567",
+            "127.0.0.1:25564",
+        ]:
+            with self.subTest(endpoint=endpoint):
+                errors = self.assert_rejected("--packs", endpoint)
+                self.assertIn("must differ", errors)
+                self.assertIn(endpoint, errors)
+
+    def test_packs_prefix_must_be_a_literal_segment_path(self):
+        for prefix in ["/packs", "packs/", "/packs//", "/..", "/"]:
+            with self.subTest(prefix=prefix):
+                errors = self.assert_rejected(
+                    "--packs", "127.0.0.1:8000",
+                    env={"MUX_PACKS_PREFIX": prefix},
+                )
+                self.assertIn("MUX_PACKS_PREFIX", errors)
+                self.assertIn(prefix, errors)
+
+    def test_packs_with_a_hand_written_config_is_rejected(self):
+        errors = self.assert_rejected(
+            "--packs", "127.0.0.1:8000",
+            "--haproxy-config", (self.configs / "frpc.toml").as_posix(),
+        )
+
+        self.assertIn("--haproxy-config", errors)
+
+    def test_packs_needs_a_value(self):
+        errors = self.assert_rejected("--packs")
+
+        self.assertIn("--packs needs HOST:PORT", errors)
+
+    def test_packs_backend_warning_does_not_block_startup(self):
+        certificate = self.real_pem("packs.pem", days=30, common_name="packs.example")
+        cases = [
+            ("absent", "", True),
+            ("present", "LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*", False),
+        ]
+
+        for name, extra_listener, warned in cases:
+            with self.subTest(case=name):
+                base = self.directory / name
+                stubs = base / "stubs"
+                stubs.mkdir(parents=True)
+                self.executable(
+                    stubs, "tmux",
+                    "#!/bin/sh\n"
+                    "case \"$1\" in\n"
+                    "  has-session) exit 1 ;;\n"
+                    "  new-window) printf '%s\\n' '@1' ;;\n"
+                    "  list-panes) printf '0\\n' ;;\n"
+                    "  respawn-window) : > mux-up ;;\n"
+                    "  *) exit 0 ;;\n"
+                    "esac\n",
+                )
+                self.executable(stubs, "haproxy", "#!/bin/sh\nexit 0\n")
+                self.executable(
+                    stubs, "ss",
+                    "#!/bin/sh\n"
+                    "[ -f mux-up ] || exit 0\n"
+                    "printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:25566 0.0.0.0:*'\n"
+                    + (f"printf '%s\\n' '{extra_listener}'\n" if extra_listener else ""),
+                )
+                self.executable(stubs, "sleep", "#!/bin/sh\nexit 0\n")
+                scenes = base / "a" / "b" / "scenes"
+                scenes.mkdir(parents=True)
+                script = scenes / "frpc-shared-tcp.sh"
+                shutil.copy2(SCENE, script)
+                frpc = scenes / "frpc.sh"
+                frpc.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                frpc.chmod(0o755)
+                environment = dict(os.environ)
+                environment.update({
+                    "PATH": os.pathsep.join([stubs.as_posix(), environment["PATH"]]),
+                    "HAPROXY": (stubs / "haproxy").as_posix(),
+                    "MUX_CERT_STATE": "certs",
+                    "MUX_READY_TIMEOUT": "3",
+                })
+
+                up = subprocess.run(
+                    [
+                        SH, script.as_posix(), "up",
+                        "--config", self.configs.as_posix(),
+                        "--packs", "127.0.0.1:8000", "--no-attach",
+                    ],
+                    cwd=base, capture_output=True, text=True, env=environment,
+                )
+
+                self.assertEqual(0, up.returncode, up.stdout + up.stderr)
+                message = "nothing listens on the packs backend"
+                if warned:
+                    self.assertIn(message, up.stderr)
+                else:
+                    self.assertNotIn(message, up.stderr)
+
     def test_expiring_certificate_is_reported_but_does_not_block(self):
         certificate = self.real_pem("soon.pem", days=7, common_name="soon.example")
 
@@ -350,7 +669,7 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("CN=soon.example", result.stdout)
         self.assertIn("WARNING certificate expires within 14 days", result.stdout)
-        self.assertIn("frontend geyser_tls_termination", result.stdout)
+        self.assertIn("frontend tls_terminated", result.stdout)
 
     def test_healthy_certificate_has_no_expiry_warning(self):
         certificate = self.real_pem("healthy.pem", days=30, common_name="healthy.example")
@@ -463,6 +782,85 @@ class SharedTcpSceneTests(unittest.TestCase):
         self.assertEqual(0, down.returncode, down.stdout + down.stderr)
         self.assertFalse(inventory.exists())
 
+    def test_up_owns_the_pack_server_and_down_stops_it(self):
+        stubs = self.directory / "stubs"
+        stubs.mkdir()
+        self.executable(
+            stubs, "tmux",
+            "#!/bin/sh\n"
+            "case \"$1\" in\n"
+            "  has-session) exit 1 ;;\n"
+            "  new-window) printf '%s\\n' '@1' ;;\n"
+            "  list-panes) printf '0\\n' ;;\n"
+            "  respawn-window)\n"
+            "    case \"$*\" in\n"
+            "      *serve-packs.sh*) : > packs-up ;;\n"
+            "      *) : > mux-up ;;\n"
+            "    esac\n"
+            "    ;;\n"
+            "  *) exit 0 ;;\n"
+            "esac\n",
+        )
+        # Both ports answer once their window exists, and neither does before.
+        self.executable(
+            stubs, "ss",
+            "#!/bin/sh\n"
+            "[ -f mux-up ] || exit 0\n"
+            "printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:25566 0.0.0.0:*'\n"
+            "[ -f packs-up ] || exit 0\n"
+            "printf '%s\\n' 'LISTEN 0 4096 127.0.0.1:8000 0.0.0.0:*'\n",
+        )
+        self.executable(stubs, "sleep", "#!/bin/sh\nexit 0\n")
+        self.executable(stubs, "haproxy", "#!/bin/sh\nexit 0\n")
+        scenes = self.directory / "a" / "b" / "scenes"
+        scenes.mkdir(parents=True)
+        (self.directory / "a" / "packs").mkdir()
+        script = scenes / "frpc-shared-tcp.sh"
+        shutil.copy2(SCENE, script)
+        frpc = scenes / "frpc.sh"
+        frpc.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        frpc.chmod(0o755)
+        environment = dict(os.environ)
+        environment.update({
+            "PATH": os.pathsep.join([stubs.as_posix(), environment["PATH"]]),
+            "HAPROXY": (stubs / "haproxy").as_posix(),
+            "MUX_PACKS_DIR": "packs",
+            "MUX_PACKS_STATE": "state",
+            "MUX_READY_TIMEOUT": "3",
+        })
+        state = self.directory / "state"
+
+        up = subprocess.run(
+            [
+                SH, script.as_posix(), "up", "--config", self.configs.as_posix(),
+                "--serve-packs", "--no-attach",
+            ],
+            cwd=self.directory, capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, up.returncode, up.stdout + up.stderr)
+        self.assertEqual(
+            "owned 127.0.0.1:8000 /packs/",
+            state.read_text(encoding="utf-8").strip(),
+        )
+
+        status = subprocess.run(
+            [SH, script.as_posix(), "status"], cwd=self.directory,
+            capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, status.returncode, status.stdout + status.stderr)
+        self.assertIn("packs: owned 127.0.0.1:8000 under /packs/", status.stdout)
+        self.assertIn("window packs up", status.stdout)
+
+        down = subprocess.run(
+            [SH, script.as_posix(), "down"], cwd=self.directory,
+            capture_output=True, text=True, env=environment,
+        )
+
+        self.assertEqual(0, down.returncode, down.stdout + down.stderr)
+        self.assertFalse(state.exists())
+
     def test_plain_config_is_unchanged(self):
         self.assertEqual(
             [
@@ -500,15 +898,15 @@ class SharedTcpSceneTests(unittest.TestCase):
         certificate = self.pem("certs/site.pem")
         config = self.config("--tls-cert", certificate.as_posix())
         text = "\n".join(config)
-        self.assertIn("    use_backend geyser_tls if is_tls", config)
+        self.assertIn("    use_backend tls_termination if is_tls", config)
         self.assertIn("    use_backend geyser_signaling if is_http", config)
         self.assertIn("    default_backend java", config)
         # Plain HTTP keeps its direct route to Geyser; only the ClientHello
         # is handed to the terminating frontend.
         self.assertNotIn("geyser_signaling if is_tls", text)
-        self.assertIn("backend geyser_tls", config)
+        self.assertIn("backend tls_termination", config)
         self.assertIn("    server termination 127.0.0.1:25567", config)
-        self.assertIn("frontend geyser_tls_termination", config)
+        self.assertIn("frontend tls_terminated", config)
         self.assertIn(MUX_BEDROCK, config)
         self.assertIn(MUX_JAVA, config)
         listener = [line for line in config if line.startswith("    bind 127.0.0.1:25567 ssl crt ")]

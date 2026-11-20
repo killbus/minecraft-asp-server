@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Paper 26.2 build 135 replaces ASP for native single-primary-save startup. Its fixed download URL and SHA-256 are verified. Other artifacts retain the 2026-11-08 observed inventory: original downloads were not independently verified unless noted. The datapack belongs to the default world only; selecting another save does not install it there.",
+  "notes": "Paper 26.2 build 135 runs one native primary save. Build-specific download URLs and existing artifact hashes retain the verification recorded on 2026-11-18; source URLs remain project references, and no latest endpoint is used. The datapack belongs to the default world only; selecting another save does not install it there.",
   "datapack_directories": [
     "world/datapacks"
   ],
@@ -21,7 +21,8 @@
       "path": "plugins/CoreProtect-CE-24.1.jar",
       "version": "24.1",
       "source": "https://coreprotect.net/",
-      "notes": "Upstream project reference from plugin.yml; the distributor/build of this CE-named JAR is not established.",
+      "download_url": "https://cdn.modrinth.com/data/Lu3KuzdV/versions/3sehX6Sg/CoreProtect-CE-24.1.jar",
+      "notes": "coreprotect.net answers 403 to scripted clients; the Modrinth file is byte-identical to the locked JAR.",
       "sha256": "a2acef7c06ef201355cef07d591a6055dfed358ad768faaaaaf4e276865ecc97"
     },
     {
@@ -31,6 +32,7 @@
       "version": "2.2.5-SNAPSHOT",
       "build": "b141-81b65cc",
       "source": "https://geysermc.org/download/",
+      "download_url": "https://download.geysermc.org/v2/projects/floodgate/versions/2.2.5/builds/141/downloads/spigot",
       "sha256": "21570aff9ce17d6983928e8552777760e1ede5050026b04c686b0ae112e6fd7e"
     },
     {
@@ -40,6 +42,7 @@
       "version": "2.12.1-SNAPSHOT",
       "build": "b1302-cbd42b8a0c47cef046b408411508c67f82cd8e3c",
       "source": "https://geysermc.org/download/",
+      "download_url": "https://download.geysermc.org/v2/projects/geyser/versions/2.12.1/builds/1302/downloads/spigot",
       "sha256": "e13592d8ef907657eb9bae6f778dcb6ccb7f4a5b4641baeeb298ff5d13ccc92f"
     },
     {
@@ -49,6 +52,8 @@
       "version": "2.3.75-1299a2a",
       "build": "1299a2a",
       "source": "https://grim.ac/",
+      "download_url": "https://cdn.modrinth.com/data/LJNGWSvH/versions/QNc4r5Qj/grimac-bukkit-2.3.75-1299a2a.jar",
+      "notes": "Published on Modrinth's alpha channel; the GitHub release publishes no binary asset.",
       "sha256": "080e01c5545695b7e755f705d73da49c5eae9b86d67f1425f88f2c7b414f8da9"
     },
     {
@@ -57,6 +62,7 @@
       "path": "plugins/SkinsRestorer.jar",
       "version": "15.12.6",
       "source": "https://skinsrestorer.net/",
+      "download_url": "https://github.com/SkinsRestorer/SkinsRestorer/releases/download/15.12.6/SkinsRestorer.jar",
       "sha256": "a85b4a370f988741c9a38f4d0498262edacbf3220314790ac1c127461996359c"
     },
     {
@@ -65,7 +71,8 @@
       "path": "plugins/ViaBackwards.jar",
       "version": "5.12.2-SNAPSHOT",
       "source": "https://viaversion.com/backwards",
-      "notes": "Exact CI build number and original artifact URL were not recovered; SHA-256 identifies this snapshot.",
+      "download_url": "https://ci.viaversion.com/job/ViaBackwards/806/artifact/build/libs/ViaBackwards-5.12.2-SNAPSHOT.jar",
+      "notes": "Jenkins build 806 (2aec244) is the only build whose bytes match; Jenkins may prune it.",
       "sha256": "a88617fa001469c3be0c8ba7f24a5bb2593294d176c1f81041d6bf4482c5d726"
     },
     {
@@ -74,7 +81,8 @@
       "path": "plugins/ViaVersion.jar",
       "version": "5.12.2-SNAPSHOT",
       "source": "https://viaversion.com/",
-      "notes": "Exact CI build number and original artifact URL were not recovered; SHA-256 identifies this snapshot.",
+      "download_url": "https://ci.viaversion.com/job/ViaVersion/1478/artifact/build/libs/ViaVersion-5.12.2-SNAPSHOT.jar",
+      "notes": "Jenkins build 1478 (08776de) is the only build whose bytes match; Jenkins may prune it.",
       "sha256": "5b76329e2c832746dac7cae47a8b688bcba8d31254b6872134e98ae7d5c561d4"
     },
     {

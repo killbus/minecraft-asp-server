@@ -1,0 +1,272 @@
+# Configuration Bundle
+
+> Executable contract for tracking `server/` configuration as source and
+> applying it to a host.
+
+---
+
+## Scenario: Declarative server configuration lives in git
+
+### 1. Scope / Trigger
+
+This spec applies when changing:
+
+- `config/`
+- `config.lock.json`
+- `settings/`
+- `scripts/apply_config.py`
+- `tests/test_apply_config.py`
+- the backup/snapshot descriptions in `docs/SINGLE-WORLD-SOP.md`
+
+It is triggered because the tree, the manifest, the settings file and the
+tool form one contract: the manifest describes the tree, the tool refuses to
+drift from the manifest, and the docs tell an operator which bytes may be
+copied.
+
+`server/` stays gitignored. It is instance state plus downloaded binaries, and
+it is never a commit target.
+
+### 2. Signatures
+
+```sh
+python -B scripts/apply_config.py \
+    [--config-dir config] [--lock config.lock.json] [--server-dir server] \
+    [--settings settings/<host>.json] [--set NAME=VALUE]... \
+    [--dry-run | --check]
+```
+
+Values resolve as: `--set` first, then the settings file, then the process
+environment, then the manifest default, then refuse. `--dry-run` and
+`--check` are mutually exclusive in effect; neither writes.
+
+### 3. Contracts
+
+Manifest shape:
+
+```json
+{
+  "schema_version": 1,
+  "files": [{
+    "path": "server.properties",
+    "class": "source",
+    "sha256": "<sha256 of the committed template>",
+    "placeholders": [{ "name": "PACK_URL", "default": null }]
+  }]
+}
+```
+
+`path` is server-relative POSIX. `sha256` describes the template as
+committed, placeholders and all. `default` is optional.
+
+Settings shape, also optional:
+
+```json
+{
+  "schema_version": 1,
+  "values": {
+    "PACK_URL": "https://<public>:<port>/packs/pack-a.zip",
+    "GEYSER_ADVERTISE_ADDRESS": "<public>:34003",
+    "MANAGEMENT_SERVER_SECRET": "env:MANAGEMENT_SERVER_SECRET"
+  }
+}
+```
+
+A settings file holds per-host coordinates: public values that differ between
+hosts. It is named after the host and passed explicitly with `--settings`;
+nothing reads `settings/` implicitly. It lives outside `config/`, because
+`config/` is a byte-for-byte mirror of `server/` and a settings file has no
+destination path.
+
+Git tracks `settings/<host>.example.json` only. `settings/<host>.json` is
+gitignored, so `git pull` on a host never has to merge a coordinate the
+repository cannot know, and the example cannot silently become a second, stale
+deployment. That untracked-ness makes the file instance state: it is part of
+the server snapshot described in `docs/SINGLE-WORLD-SOP.md`, and that
+snapshot's copy is restored only onto the host it came from.
+
+The file has exactly two keys: `schema_version` and `values`. `values` keys
+are placeholder names, not paths. A key no template declares is refused, so a
+typo cannot sit silent. A credential is never a literal: it is written
+`env:VARIABLE`, resolved from the process environment at render time, and
+refused when unset. A blank value other than exact empty `PACK_URL`, a value
+containing `${`, a wrong schema, an
+unknown top-level key, or an `env:` target that is not a variable name is
+refused.
+
+Class rule - would two hosts running the same world legitimately have
+different bytes?
+
+- no -> source: copied into `config/`, applied by the tool
+- yes, the operator supplies it -> secret: a `${NAME}` placeholder
+- yes, the host produced it by running -> instance: never bundled,
+  never applied
+
+The tool enforces `class == "source"` and independently re-derives the class
+from the path via `apply_config.classify`. A manifest edit cannot smuggle
+`worlds.yml`, `key.pem`, `*.db`, `playerdata`, caches, `logs/`, `nethernet/`,
+`ops.json`, `whitelist.json`, `banned-*.json`, `usercache.json` or `eula.txt`
+past it.
+
+Only the known root files (`server.properties`, `bukkit.yml`, `spigot.yml`,
+`commands.yml`, `permissions.yml`) and the `config/` and `plugins/` trees can
+be source. Arbitrary named-save paths are always instance state, even when
+no save is currently present. Existing native `level.dat` under a destination
+root also refuses configuration application. Resolved destinations inside any
+native save are refused, including configuration links into save subdirectories.
+Historical plugin player/profile
+state remains protected even though its plugin is not distributed.
+
+`PACK_URL` is required and renders native `server.properties` `resource-pack`.
+An exact empty string from settings, `--set PACK_URL=` or environment means no
+pack. A nonempty value must parse as HTTPS with a host, or HTTP on loopback
+(`127.0.0.1`, `localhost`, `[::1]`). Reject whitespace, controls, credentials and
+malformed hosts/ports. No Multiverse or PackManagerPro configuration is shipped.
+Properties interpolation escapes backslashes and rejects control characters
+so values cannot create an extra property or continuation line.
+
+Apply contract:
+
+1. every manifest entry's packed template must hash to `sha256` (else exit 2)
+2. every `${NAME}` in a template must be declared for that file (else exit 2)
+3. every declared placeholder must resolve a value (else exit 2)
+4. no rendered value may contain `${` (else exit 2 sanity check)
+5. destination = `safe_path(server_dir, path)` from `verify_runtime`
+6. status is `CREATE`, `UPDATE`, or `UNCHANGED` from a byte comparison
+7. a changed file is written to `<name>.tmp.<pid>` and `os.replace`d
+8. any file in the tree absent from the manifest makes the run refuse
+9. any settings key no manifest entry declares makes the run refuse
+
+A `default` in the manifest is permitted only for a plugin-generated
+telemetry identity (`FLOODGATE_METRICS_UUID`, `BSTATS_SERVER_UUID`): the value
+carries no behaviour, so a fresh host may share it and an existing host is
+not churned. A credential never gets a default.
+
+Exit codes: `0` = applied (or `--check` clean), `1` = `--check` found a
+difference, `2` = refused, nothing written. Errors go to stderr as
+`ERROR: ...`, never as a traceback.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Host matches the bundle | `UNCHANGED` per file, exit 0 |
+| Destination absent | `CREATE`, exit 0 |
+| Destination differs | `UPDATE`, exit 0 |
+| Server dir absent | every entry `CREATE`, exit 0; `apply` creates the tree |
+| Server path is a file | `ERROR: server directory is not a directory`, exit 2 |
+| `--check` and anything differs | statuses printed, exit 1, no write |
+| `--dry-run` | statuses printed, exit 0, no write |
+| Template byte changed after the lock | `ERROR: ... drifted from the manifest`, exit 2 |
+| Manifest path resolves to an instance path | `ERROR: ... is instance state`, exit 2 |
+| `class` is not `source` | `ERROR: ... only source may be applied`, exit 2 |
+| Template holds an undeclared `${NAME}` | `ERROR: ... which the manifest does not declare`, exit 2 |
+| No value for a declared placeholder | `ERROR: no value for ${NAME}`, exit 2 |
+| A value still holds `${` | `ERROR: ... still contains a placeholder`, exit 2 |
+| Settings file absent or unreadable | `ERROR: cannot read settings ...`, exit 2 |
+| Settings JSON is malformed or a key repeats | `ERROR: settings are not valid JSON ...`, exit 2 |
+| Settings lack `schema_version: 1` or a `values` object | `ERROR: settings must ...`, exit 2 |
+| Settings hold a top-level key other than `schema_version`/`values` | `ERROR: settings hold an unknown key ...`, exit 2 |
+| Settings value is blank other than exact empty `PACK_URL`, or holds `${` | `ERROR: settings value ...`, exit 2 |
+| Settings value is `env:NAME` and `NAME` is unset | `ERROR: ... needs NAME in the environment`, exit 2 |
+| Settings value is `env:` with no valid name | `ERROR: ... must be env:NAME`, exit 2 |
+| Settings key no template declares | `ERROR: settings names ..., which no template declares`, exit 2 |
+| File in the tree, absent from the manifest | `ERROR: ... not in the manifest`, exit 2 |
+| Manifest entry, absent from the tree | `ERROR: ... missing from`, exit 2 |
+| `..`, absolute path, or symlink escape | `ERROR`, exit 2 |
+| Duplicate JSON key | `ERROR: duplicate JSON key`, exit 2 |
+
+### 5. Good / Base / Bad Cases
+
+- Good: `--check` on an applied fixture exits 0 with every template `UNCHANGED`.
+- Base: a fresh host copies `settings/<host>.example.json` to
+  `settings/<host>.json`, edits the coordinates, and gets every template as `CREATE`;
+  `PACK_URL` and `GEYSER_ADVERTISE_ADDRESS` come from that file, the credential
+  from the environment.
+- Good: `--settings settings/minecraft-server.json` with
+  `MANAGEMENT_SERVER_SECRET` exported renders the same bytes as three
+  `--set` flags, and the file itself holds no credential.
+- Bad: adding `plugins/Multiverse-Core/worlds.yml` to `config/` so "the host
+  gets the same worlds". Multiverse writes that file from the worlds it
+  finds; a copied one declares worlds the host does not have and
+  `join-destination: world` sends players to a missing destination.
+- Bad: giving `PACK_URL` a default so the tool "just works". The default
+  would point every host at one host's address.
+- Bad: a public `http://` pack URL. The frp entry serves no plaintext http,
+  so a non-loopback `PACK_URL` must be `https://`; loopback
+  (`127.0.0.1`/`localhost`/`::1`) stays allowed for local testing. `resolve()`
+  enforces this after the placeholder check, so a value that still holds a
+  `${...}` is refused for the more fundamental reason first.
+- Bad: putting a credential literal in `settings/<host>.json`. The file is
+  copied with the world into every snapshot, so the credential leaks there.
+- Bad: committing the production `settings/<host>.json`. Coordinates are host
+  state, not source: a tracked copy turns every pull into a merge and hands a
+  new host another host's answer.
+- Bad: putting the settings file in `config/`. Every file there needs a
+  `server/` destination, and `plan()` refuses one that no manifest declares.
+
+### 6. Tests Required
+
+- render, second-run `UNCHANGED`, `UPDATE` over a differing destination
+- value from the environment; `--set` wins over the environment
+- settings supply a value; `--set` wins over settings; settings win over the
+  environment
+- settings `env:NAME` resolves; an unset `env:` target is refused
+- settings blank value, `${` value, wrong schema, absent file, and a key no
+  template declares are each refused; an unknown top-level key is refused
+- missing value, malformed `--set`, undeclared placeholder, value holding `${`
+- `class: instance` refused; instance path refused even when class says source
+- template hash drift refused before any write
+- `--dry-run` and `--check` write nothing; `--check` exit 1 vs 0
+- tree file absent from the manifest, and manifest entry absent from the tree
+- `..` path never reaches the server dir; duplicate JSON key
+- CRLF template keeps CRLF (server.properties is CRLF on this host)
+- full bundle round-trip and repeated apply against an isolated fixture, preserving
+  native saves, player data, host settings and existing plugin instance state
+- empty pack selection from settings/CLI/environment; missing and malformed URL
+  refusals; properties escaping and control rejection
+- named-save manifest injection and native save/configuration root collision refusal
+- backup snapshots `settings/*.json`, omits `*.example.json`, and lists the
+  copied file in `MANIFEST.txt`
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```text
+copy server/plugins/Multiverse-Core server/plugins/PackManagerPro ...
+```
+
+Wrong:
+
+```text
+git add settings/minecraft-server.json
+```
+
+Correct:
+
+```text
+git pull
+[ -f settings/minecraft-server.json ] || cp settings/minecraft-server.example.json settings/minecraft-server.json
+# edit the coordinates; the file stays untracked and lands in the next snapshot
+python -B scripts/apply_config.py --check --settings settings/minecraft-server.json
+python -B scripts/apply_config.py --settings settings/minecraft-server.json
+```
+
+Wrong:
+
+```python
+destination.write_bytes(rendered)
+```
+
+Correct:
+
+```python
+temporary = destination.with_name(f"{destination.name}.tmp.{os.getpid()}")
+temporary.write_bytes(payload)
+os.replace(temporary, destination)
+```
+
+The first leaves a truncated config immediately after a crash or a full
+disk; the second keeps the old file. Never "fix" a hash mismatch by
+editing `config.lock.json` - the mismatch means the template changed under
+the manifest, so re-derive the lock from the reviewed template.

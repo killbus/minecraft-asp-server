@@ -23,8 +23,9 @@ import shutil
 import socket
 import subprocess
 import sys
-import tempfile
 import unittest
+
+from tests import scratch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,9 +56,7 @@ HAVE_LISTEN_TOOL = listening_socket_tool()
 @unittest.skipIf(SH is None, "POSIX sh is not available")
 class MuxLifetimeTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
-        self.directory = Path(self.temporary.name)
+        self.directory = self.enterContext(scratch.directory("frpc-mux-"))
         # A relative pidfile: the scene resolves it against the caller's
         # directory, which is this repository root.
         self.pidfile = Path(".tmp") / f"lifetime-test-{os.getpid()}" / "haproxy.pid"
@@ -265,7 +264,7 @@ class MuxLifetimeTests(unittest.TestCase):
             "frontend mc_shared\n"
             "    bind 127.0.0.1:25566\n"
             "\n"
-            "frontend geyser_tls_termination\n"
+            "frontend tls_terminated\n"
             "    bind 127.0.0.1:25567 ssl crt /outside/asp-frpcs/tls/one.pem"
             " crt /outside/asp-frpcs/tls/two.pem strict-sni\n"
             "    default_backend geyser_signaling\n",

@@ -21,6 +21,8 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [frpc Scenes](./frpc-scenes.md) | Declarative optional frpc process composition | Active |
 | [Single-world Startup](./single-world-start.md) | Native primary-save selection and complete offline snapshots | Active |
+| [Runtime Inventory](./runtime-inventory.md) | `runtime.lock.json`, read-only verification, installer contract | Active |
+| [Configuration Bundle](./config-bundle.md) | Tracking `server/` config as source, rendering secrets, apply contract | Active |
 
 ---
 

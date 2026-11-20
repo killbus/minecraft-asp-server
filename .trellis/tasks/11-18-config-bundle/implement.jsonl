@@ -1,0 +1,10 @@
+{"file": ".trellis/tasks/11-18-config-bundle/prd.md", "reason": "requirements, class list, acceptance criteria"}
+{"file": ".trellis/tasks/11-18-config-bundle/design.md", "reason": "boundary rule, shape, apply contract, failure semantics"}
+{"file": ".trellis/tasks/11-18-config-bundle/implement.md", "reason": "ordered checklist and verification commands"}
+{"file": "scripts/verify_runtime.py", "reason": "safe_path, file_status, fingerprint, read_lock are the reused primitives"}
+{"file": "scripts/install_runtime.py", "reason": "installer conventions: lock reading, statuses, atomic writes"}
+{"file": "runtime.lock.json", "reason": "manifest shape to mirror in config.lock.json"}
+{"file": "docs/PAPER-WORLD-SOP.md", "reason": "section 7 backup classes and section 7a login destination"}
+{"file": "docs/ASP-SOP.md", "reason": "deploy and restore flow, section 4.1 lock reconciliation"}
+{"file": "scripts/backup.sh", "reason": "what the existing snapshot already covers, to keep the boundary honest"}
+{"file": "server/", "reason": "source of truth for the inventory walk"}

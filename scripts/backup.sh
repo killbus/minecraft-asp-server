@@ -8,6 +8,7 @@
 #  Scope (see docs/SINGLE-WORLD-SOP.md):
 #    native saves + whitelist/ban/usercache/ops json + server config
 #    + config/ (Paper) + per-plugin config dirs (jars excluded)
+#    + settings/*.json (per-host coordinates; *.example.json excluded)
 #    Known-regenerable plugin caches are excluded (see below).
 #  Output: <target>/<UTC timestamp>/ with MANIFEST.txt
 #
@@ -26,6 +27,7 @@
 #    BACKUP_MIN_INTERVAL   skip when every target already has a complete
 #                          backup younger than this many minutes
 #                          (default 0 = never skip)
+#    SETTINGS_DIR          per-host settings source (default ../settings)
 #    BACKUP_REQUIRE_ALL=1  a failed mirror fails the run (default 0)
 #    ALLOW_ONLINE=1        proceed even though the server is running
 # ============================================================
@@ -41,7 +43,7 @@ SCRIPT_DIR="$(pwd)"
 #  Paths may contain spaces.
 #
 #      ../backups
-#      /mnt/usb/asp-backups
+#      /mnt/usb/paper-backups
 #
 #  The FIRST entry is the primary target: if it fails, the whole run
 #  fails. Every later entry is a mirror: a mirror failure prints a
@@ -61,6 +63,7 @@ KEEP="${KEEP:-5}"
 if [ $# -ge 1 ]; then SERVER_DIR="$1"; else SERVER_DIR="$SCRIPT_DIR/../server"; fi
 MIN_INTERVAL="${BACKUP_MIN_INTERVAL:-0}"
 REQUIRE_ALL="${BACKUP_REQUIRE_ALL:-0}"
+SETTINGS_DIR="${SETTINGS_DIR:-$SCRIPT_DIR/../settings}"
 TS="$(date -u +%Y%m%d-%H%M%S)"
 CURRENT_DEST=""
 
@@ -99,6 +102,13 @@ if [ ! -f "$SERVER_DIR/paper-server.jar" ]; then
     echo "[backup] ERROR: not a server dir: $SERVER_DIR (paper-server.jar missing)" >&2
     exit 1
 fi
+
+for reserved in config plugins settings; do
+    if [ -e "$SERVER_DIR/$reserved/level.dat" ]; then
+        echo "[backup] ERROR: native save collides with snapshot directory: $reserved" >&2
+        exit 1
+    fi
+done
 
 # Resolve the configured targets to absolute paths, one per line.
 TARGET_LIST="$(while read -r raw; do
@@ -186,7 +196,7 @@ do_target() {
 
     # --- player files + server config ---
     for f in whitelist.json ops.json banned-ips.json banned-players.json usercache.json \
-             server.properties eula.txt bukkit.yml spigot.yml commands.yml server-icon.png; do
+             server.properties eula.txt bukkit.yml spigot.yml commands.yml permissions.yml server-icon.png; do
         if [ -f "$SERVER_DIR/$f" ]; then
             cp "$SERVER_DIR/$f" "$dest/" || return 1
         fi
@@ -205,7 +215,7 @@ do_target() {
     fi
 
     # --- plugin dirs: config + data, jars excluded ---
-    # Only caches proven regenerable in docs/ASP-SOP.md section 1 are
+    # Only caches proven regenerable in docs/SINGLE-WORLD-SOP.md are
     # excluded. Do not widen this to every */cache/: a plugin may keep
     # real state in a directory with that name.
     mkdir -p "$dest/plugins" || return 1
@@ -230,6 +240,25 @@ do_target() {
         fi
     done
     cp "$SERVER_DIR"/plugins/*.yml "$dest/plugins/" 2>/dev/null || true
+
+    # --- per-host settings: untracked, so the snapshot is their only copy ---
+    # git tracks settings/*.example.json only. The file that fills the
+    # placeholders is host state, not source: it cannot be reconstructed from
+    # the repository, and it is what explains the rendered server.properties
+    # and plugin yml beside it. See docs/SINGLE-WORLD-SOP.md.
+    if [ -d "$SETTINGS_DIR" ]; then
+        mkdir -p "$dest/settings" || return 1
+        tar cf - --exclude='*.example.json' -C "$SETTINGS_DIR" . | tar xf - -C "$dest/settings"
+        src_count=$(find "$SETTINGS_DIR" -type f ! -name '*.example.json' | wc -l)
+        dst_count=$(find "$dest/settings" -type f | wc -l)
+        if [ "$src_count" -ne "$dst_count" ]; then
+            echo "[backup] ERROR: settings copy incomplete ($dst_count of $src_count): $dest" >&2
+            return 1
+        fi
+    fi
+
+    # Resource packs under packs/ are externally sourced and regenerable;
+    # they stay out of the snapshot. Preserve their external source and hash.
 
     # --- manifest: hash every backed-up file (world included) ---
     {

@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/index.md","reason":"Relevant deployment contract index"}
+{"file":".trellis/spec/backend/single-world-start.md","reason":"Retain native primary save selection and backups"}
+{"file":".trellis/spec/backend/frpc-scenes.md","reason":"Shared entry topology and scene lifecycle"}
+{"file":".trellis/spec/guides/commit-discipline.md","reason":"Separate independent infrastructure from world management"}

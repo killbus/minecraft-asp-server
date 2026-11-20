@@ -19,7 +19,7 @@ It is triggered because the scene adds a command signature, a file-format
 contract, environment precedence, lifecycle ordering, and a secrets boundary.
 
 The scene is optional. `start.*`, `backup.*`, and runtime verification must
-never depend on it. Deleting the scene scripts must leave core ASP behavior
+never depend on it. Deleting the scene scripts must leave core Paper behavior
 unchanged.
 
 ### 2. Signatures
@@ -44,9 +44,18 @@ Shared-TCP composition:
 scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> ...
 scripts/scenes/frpc-shared-tcp.sh up --scene <file> ...
 scripts/scenes/frpc-shared-tcp.sh up --scene <file> --proxy-protocol
+scripts/scenes/frpc-shared-tcp.sh up --scene <file> --packs 127.0.0.1:8000
 ```
 
 `--config` and `--scene` are mutually exclusive in both scripts.
+
+Both `up` verbs accept one optional `--world NAME`. It uses exactly the direct
+launcher's ASCII `[A-Za-z0-9_-]+` grammar and existing native `level.dat` check,
+rejecting linked directories/markers before tmux or sidecar effects. Append
+the quoted name to `bash scripts/start.sh`; absent selection leaves that
+command unchanged. The shared wrapper forwards selection into its deferred
+frpc invocation too. A plain `server = false` scene refuses it unless deferred.
+No scene file key or environment world registry is added.
 
 Other verbs remain unchanged:
 
@@ -77,6 +86,13 @@ backend carries `send-proxy-v2`, so Paper still sees a PROXY v2 header. The
 frontend is emitted only for the generated configuration. A hand-written
 `--haproxy-config` owns the whole file and must add the frontend itself.
 
+The committed config bundle fixes the backend side of that pair: Paper's
+`proxies.proxy-protocol: true` and Geyser's
+`advanced.java.use-haproxy-protocol: true`. `send-proxy-v2` is therefore
+not optional in this deployment - a generated mux without
+`--proxy-protocol` hands Paper a headerless connection it now refuses.
+Changing one side means changing the bundle and the `up` line together.
+
 #### Certificate expiry observation
 
 `--tls-cert` is a consumed input, not something this scene provisions.
@@ -100,6 +116,49 @@ The scene must still make the input's validity observable:
 
 Replacing a PEM requires the existing `reload` verb to make HAProxy read it.
 The scene does not watch files or reload on its own.
+
+#### Resource-pack route (opt-in, plaintext or TLS)
+
+`--packs HOST:PORT` adds a destination for resource-pack downloads on the
+entry port. Without `--tls-cert` it is plaintext on the shared port. The
+contract:
+
+- the route is one ACL on `mc_shared`,
+  `acl is_packs payload(0,N) -m beg "GET <prefix>"`, plus
+  `use_backend packs if is_packs` **before** the Geyser rule, because the same
+  request also matches `is_http`;
+- the backend is `mode tcp`, like every other backend in this file; HAProxy
+  reads the bytes for the ACL and forwards the connection unchanged;
+- with `--tls-cert` a ClientHello cannot be read as a payload match, so the
+  same ACL and `use_backend` move to the TLS-terminating frontend
+  (`tls_terminated`), ahead of `default_backend geyser_signaling`,
+  and are dropped from `mc_shared`; the frontend is `mode tcp`, there is no
+  `mode http` and no new frontend. That frontend keeps the content-wait pair
+  (`tcp-request inspect-delay 3s` +
+  `tcp-request content accept if is_http`) alongside its own `is_http`
+  method ACL: in `mode tcp` the switching rules are evaluated at the accept
+  event, so without the pair `payload()` reads an empty buffer and `is_packs`
+  is never true. With the pair absent the failure is not cosmetic - every
+  request silently lands on `default_backend geyser_signaling` and Geyser
+  answers 404 `content-length: 0`;
+- the frontend location of the rule is therefore the one variable: shared
+  frontend without `--tls-cert`, terminating frontend with it. The backend,
+  the ACL text and the prefix contract are unchanged;
+- the `is_http` method list exists once in the generator
+  (`_ph_http_methods`) and is referenced by both frontends that can see a
+  request line; a second copy drifts silently, because a method missing from
+  one list falls through to Geyser instead of the pack backend;
+- `MUX_PACKS_PREFIX` (default `/packs/`) must be one literal path segment:
+  leading and trailing `/`, only `A-Za-z0-9._~/-`, no `//`, no `..`, and not
+  `/` alone;
+- with the option absent, the generated file is byte-identical to the
+  pre-option output, including ACL order;
+- the match is offset 0 of a fresh connection. Keep-alive reuse, h2c, and a
+  request that has sent fewer than `N` bytes when the 4-byte `is_http` accept
+  fires fall through to Geyser. That limitation is documented, not fixed by
+  restructuring the accept line;
+- the backend sees the forwarded path unchanged, so the pack server must serve
+  `server/packs/` under the same prefix (`scripts/serve_packs.py`).
 
 ### 3. Contracts
 
@@ -189,7 +248,7 @@ placeholder even when the manifest says `server = false`. This is what
 `frpc-shared-tcp.sh` ordering is always:
 
 ```text
-all frpc sidecars -> HAProxy binds -> server starts
+all frpc sidecars -> HAProxy binds -> optional owned packs bind -> server starts
 ```
 
 #### Transport roles
@@ -211,7 +270,7 @@ all frpc sidecars -> HAProxy binds -> server starts
   repository.
 - `examples/scenes/` contains placeholders only and is not a deployment
   asset.
-- `docs/ASP-SOP.md` is the operator-facing source of truth. Task research is
+- `docs/SINGLE-WORLD-SOP.md` is the operator-facing source of truth. Task research is
   evidence, not normative documentation.
 
 ### 4. Validation & Error Matrix
@@ -223,6 +282,11 @@ all frpc sidecars -> HAProxy binds -> server starts
 | duplicate scene path option | exit 2 |
 | invalid `MUX_LAN_JAVA` in generated PROXY mode | exit 2 |
 | `MUX_LAN_JAVA` collides with another bind | exit 2 |
+| `--packs` endpoint is not `HOST:PORT` | exit 2 |
+| `--packs` port collides with any mux bind | exit 2 |
+| `MUX_PACKS_PREFIX` is not a literal `/segment/` path | exit 2 |
+| `--packs` with a hand-written `--haproxy-config` | exit 2 |
+| nothing listens on the `--packs` backend | warning; start continues |
 | non-numeric `MUX_CERT_WARN_DAYS` | exit 2 |
 | missing/unreadable scene file | exit 2 |
 | missing `session` or `server` | exit 2 |

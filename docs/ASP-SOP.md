@@ -4,6 +4,8 @@
 > primary-save selection; follow [Single-world Paper startup](SINGLE-WORLD-SOP.md)
 > for current startup, runtime verification and backup behavior. The ASP
 > installation and migration commands below do not apply to this branch.
+> Git does not contain a rollback runtime because `server/` is ignored.
+> Restore from an operator-owned complete snapshot when rollback is needed.
 
 How to take an ASP server from scratch to production-ready.
 Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-14.
@@ -25,7 +27,9 @@ Target: ASP 26.2 (Minecraft 26.2). Last updated: 2026-11-14.
 | Program (dropped in) | `plugins/asp-plugin-*.jar` | SWP (Slime World Plugin) - "the plugin" in the official docs; released together with the server jar |
 | Program (dropped in) | other `plugins/*.jar` | Geyser, Floodgate, ViaVersion, SkinsRestorer, ... |
 | Program (dropped in) | `world/datapacks/*.zip` | World datapacks, not plugins; included in the whole-world backup |
-| Config (kept, edited by hand) | `eula.txt`, `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`, `server-icon.png`, per-plugin yml (`worlds.yml`, ...) | `/reload` or restart after edits |
+| Config (source, in git) | `server.properties`, `bukkit.yml`, `spigot.yml`, `commands.yml`, `permissions.yml`, `config/paper-global.yml`, `config/paper-world-defaults.yml`, per-plugin declarative yml | Lives in `config/` and `config.lock.json`; apply with section 2a, not by hand |
+| Operator state (instance) | `eula.txt`, `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Never applied from the bundle |
+| Generated state (instance) | `plugins/*/worlds.yml`, `anchors.yml`, `key.pem`, `*.db`, caches, `nethernet/` | Never applied from the bundle |
 | Data (not regenerable - back these up) | `world/` (`level.dat`, `data/`, `dimensions/`, `players/`), `whitelist.json`, `ops.json`, `banned-*.json`, `usercache.json` | Backup policy centers on these |
 | Sensitive instance state (back up, never commit) | `plugins/Geyser-Spigot/nethernet/` (`provider-state/`, `identity.pem`, `operator-link.txt`) | NetherNet/Warden identity; restoring it keeps the same `*.wdn.gg` name. Contains a private key - never commit, share or paste it |
 | Regenerable output (safe to delete) | `libraries/`, `versions/`, `cache/`, `logs/`, `.paper/`, `slime_worlds/`, `session.lock`, `level.dat_old`, `*.log` | Rebuilt/re-downloaded at startup; do not copy to a new machine |
@@ -83,6 +87,33 @@ state under that name, so each exclusion needs the same evidence.
    the save path; chunks are already saved right after spawn
    preparation, so a kill is low-risk but not the normal procedure.
 
+### 2a. Declarative configuration
+
+Do not hand-edit `server.properties`, `config/paper-*.yml` or a plugin's
+declarative yml on a deployed host. They are tracked in this repository:
+`config/` holds the templates and `config.lock.json` holds each SHA-256.
+
+```text
+[ -f settings/minecraft-server.json ] || cp settings/minecraft-server.example.json settings/minecraft-server.json
+python -B scripts/apply_config.py --check --settings settings/minecraft-server.json
+python -B scripts/apply_config.py --dry-run --settings settings/minecraft-server.json
+python -B scripts/apply_config.py --settings settings/minecraft-server.json
+```
+
+Run it only with the server stopped. `--check` exits 0 when the host already
+matches, 1 when it differs, and 2 when the bundle is unsafe (hash drift, an
+instance path, a missing value). See
+[SINGLE-WORLD-SOP.md](./SINGLE-WORLD-SOP.md) for the active configuration and deployment contract.
+
+`settings/<host>.json` holds the public per-host coordinates. The `cp` above
+is the first deploy on a host only: the real file is gitignored, the tracked
+one is `settings/<host>.example.json`, and the snapshot in section 7 is the
+copy that survives. The credential is written as
+`env:MANAGEMENT_SERVER_SECRET` and exported in the shell, so the file holds no
+secret. Precedence is `--set` > settings > environment > manifest default;
+`--set` remains the one-off override. Never put the settings file in
+`config/` - every file there must mirror a `server/` path.
+
 ## 3. Import an existing world
 
 1. Stop the server.
@@ -118,9 +149,17 @@ the next run and never count them against retention.
    `plugins/<name>/` (including `plugins/Geyser-Spigot/nethernet/`, which
    keeps the server's Warden host name), `plugins/*.yml`, and the top-level
    `*.json`, `*.yml`, `server.properties`, `eula.txt`, `server-icon.png`.
+   Restore `settings/*.json` under the repository's `settings/` directory,
+   not `server/`: it is the deploy input, and a snapshot's copy belongs to
+   the host it came from.
    Plugin jars are not in the backup. Reconcile them with the lock revision
    associated with this backup before starting; a newer plugin may not work
    with older restored data. See section 4.1.
+
+   Restoring the instance files is correct here because the backup came from
+   this host and describes this world set. Onto a *different* host the same
+   copy is a deploy, not a restore: use `scripts/apply_config.py` (section 2a)
+   and leave `worlds.yml`, `key.pem`, the databases and the player files alone.
 6. Start the server and confirm `Done (..s)!` with no `Failed to load
    world` and no `Exception`.
 7. Keep `world.broken-<date>/` until the restored world has been played on
@@ -248,6 +287,19 @@ noted in the file. It does not assert that every existing JAR was matched
 against an upstream release.
 
 **Install or upgrade:**
+
+`python -B scripts/install_runtime.py` materialises the lock instead of
+leaving each file to a manual download. It treats the lock as the only
+source of truth: a present file whose SHA-256 matches is `OK` and skipped;
+a present file that differs is `DRIFT` and is not touched without
+`--replace`; a missing file with a `download_url` is streamed to a
+`.part` file, hashed, and renamed into place only after the hash matches;
+one without a URL is `MANUAL` and named with its `source`. `--dry-run`
+makes no request and writes nothing, `--only ID` narrows the selection,
+and exit codes are **0** = every selected artifact is present and
+matching, **1** = something is `MANUAL`, `DRIFT` or failed, **2** = invalid
+lock or arguments. It never creates plugin data, edits a config, or
+touches `world/`.
 
 1. Choose the exact artifact and record its project/release URL and
    version. Stop the server and run `scripts/backup.cmd` (Windows) or
@@ -411,12 +463,13 @@ Baseline `plugins/LoginTo/config.yml` on this server:
 - `settings.premium.enabled: false`, `settings.premium.auto-register: true`
   (Bedrock players only - see the fork notes above).
 - `settings.sessions.enabled: false`. Session reuse is keyed on the
-  recorded IP, and both frpc entries in section 10 arrive as `127.0.0.1`
-  while the mux relays without PROXY protocol (10.1, the default), so
-  sessions would log in every player after the first one. The opt-in
-  chain of 10.1.1 gives the backend the player's own address again, so
-  with it on that blocker is gone and turning sessions back on is a
-  separate decision rather than something this list rules out.
+  recorded IP. This was first set while the mux relayed without PROXY
+  protocol (10.1), when every player arrived as `127.0.0.1` and sessions
+  would log in every player after the first one. The committed bundle now
+  runs 10.1.1, so the backend sees real addresses and that blocker is
+  gone; the flag stays off as a historical default, and turning it back
+  on is a separate decision about whether per-IP session reuse is
+  wanted.
 - `settings.password.authentication-timeout: 0`, so a slow typist is not
   kicked while registering. `max-login-attempts` still applies.
 
@@ -426,9 +479,12 @@ Baseline `plugins/LoginTo/config.yml` on this server:
 - [ ] `Done (..s)` present, no ERROR-level log lines
 - [ ] All target plugins `Enabling`
 - [ ] Port 25565 listening (`netstat -ano | findstr 25565`)
-- [ ] Java client can join the configured entry: TCP `25565` directly only
-      while PROXY protocol is off; with `--proxy-protocol`, use the public
-      frpc entry or the default LAN Java frontend (10.1.1). A Bedrock
+- [ ] Java client can join the configured entry. This bundle runs with
+      PROXY protocol on, so `25565` is not a direct entry: use the public
+      frpc entry or the LAN Java frontend `25564` (10.1.1). A direct
+      `25565` connection needs the opposite bundle (both
+      `proxies.proxy-protocol` and `advanced.java.use-haproxy-protocol`
+      back to `false`) and no `--proxy-protocol` on the scene. A Bedrock
       client joins the NetherNet entry point, not the UDP port: the
       `*.wdn.gg:443` address from the `Registered with the external signaling
       service. Players can join at ...` line, or the built-in signalling TCP
@@ -840,11 +896,15 @@ its own.
 | `127.0.0.1:19132` | Geyser NetherNet TCP signalling |
 | `127.0.0.1:25567` (TLS, default) | TLS termination for the ClientHello, only with `--tls-cert` |
 | `0.0.0.0:25564` (LAN, default with PROXY) | plain Java entry that injects PROXY v2 when `--proxy-protocol` is used |
+| `127.0.0.1:8000` (opt-in) | resource-pack HTTP server, reached only through `--packs`/`--serve-packs` (10.1.3) |
 
 Classification: a TLS ClientHello (`req.ssl_hello_type 1`) or an HTTP
 method / HTTP/2 preface goes to Geyser; a Java legacy ping (`0xFE`) or a
 handshake packet (`0x00` at offset 1) goes to Java; anything still
 unclassified after `inspect-delay 3s` falls through to Java.
+
+With `--packs`, a plaintext `GET <prefix>` is decided before that: it is an
+HTTP method too, so the packs rule has to come first (10.1.3).
 
 Without `--tls-cert` the mux is a transparent byte pipe: the ClientHello
 is forwarded untouched, so a certificate has to live in Geyser
@@ -1018,11 +1078,14 @@ the player is valid for the name the player typed, whichever side
 terminates TLS - Geyser (`bedrock.signaling.builtin.https.*`) without
 `--tls-cert`, HAProxy with it.
 
-Two deliberate limits. By default HAProxy relays without speaking PROXY
-protocol, so with no `--proxy-protocol` leave frpc's
-`transport.proxyProtocolVersion` unset and do not configure the backends
-to expect it. And it shares TCP only; the WebRTC media plane is UDP and
-still needs its own frpc proxy.
+Two deliberate limits. The scene can relay without speaking PROXY
+protocol, and that mode is only usable with a bundle whose backends do not
+expect a header: with no `--proxy-protocol` leave frpc's
+`transport.proxyProtocolVersion` unset and keep
+`proxies.proxy-protocol` / `advanced.java.use-haproxy-protocol` at
+`false`. The committed bundle runs the opposite way, so its `up` line
+always passes `--proxy-protocol`. And it shares TCP only; the WebRTC media
+plane is UDP and still needs its own frpc proxy.
 
 `--dry-run` prints the HAProxy configuration and the tmux commands
 without starting tmux, frpc or HAProxy. `--listen`, `--java` and
@@ -1162,13 +1225,18 @@ the scene holds the listen port, and its judgement is covered by
 `tests/test_plain_website_check.py`, which runs the whole check against a
 stand-in proxy and a stand-in tunnel instead of haproxy and frpc.
 
-#### 10.1.1 Real client addresses (opt-in PROXY protocol v2)
+#### 10.1.1 Real client addresses (PROXY protocol v2)
 
-Java players reach Paper as `127.0.0.1`, so every offline account shares
-one IP: sessions, bans and LoginTo's recorded address cannot tell two
-players apart, and the login line prints the loopback address. That
-suits this deployment until something needs the real address, and then
-it is a four-part switch. `--proxy-protocol` makes the generated
+Without PROXY protocol, Java players reach Paper as `127.0.0.1`, so every
+offline account shares one IP: sessions, bans and LoginTo's recorded
+address cannot tell two players apart, and the login line prints the
+loopback address. The committed bundle in this repository therefore runs
+with PROXY protocol **on**: `proxies.proxy-protocol: true` in
+`config/paper-global.yml` and `advanced.java.use-haproxy-protocol: true`
+in `config/plugins/Geyser-Spigot/config.yml`. Those two are the bundle's
+initial values, not a per-host choice, so the `up` line must always carry
+`--proxy-protocol` - a mux that sends no header against these templates
+refuses every Java connection. `--proxy-protocol` makes the generated
 configuration accept a PROXY protocol v2 header on the shared port
 (`bind ... accept-proxy`) and give the Java backend one of its own
 (`server paper ... send-proxy-v2`, the IP frpc named). Every other
@@ -1220,7 +1288,7 @@ The scene generates that LAN frontend automatically whenever
 ```sh
 sh scripts/scenes/frpc-shared-tcp.sh up \
   --scene ~/asp-frpcs/minecraft.scene \
-  --proxy-protocol --no-attach
+  --proxy-protocol --serve-packs --no-attach
 ```
 
 It adds a plain `frontend lan_java` bound to `0.0.0.0:25564` by default.
@@ -1313,6 +1381,89 @@ server, no Geyser and no scene, and nothing starts it for you - it is an
 operator diagnostic. It cannot say whether Geyser accepts the header or which
 ICE path a real client picked; those still need a Bedrock client and the
 Geyser log lines above.
+
+#### 10.1.3 Resource packs on the shared port (opt-in, plaintext or TLS)
+
+`--packs HOST:PORT` adds one more destination to the shared port: a
+connection whose first bytes are `GET <prefix>` is handed to that local HTTP
+server instead of Geyser, so clients fetch
+`<public-ip>:<port>/packs/<file>` from the entry they already know. Without
+`--tls-cert` the branch is plaintext from the client's first byte, which is
+why it needs no certificate, no bound name and no TLS work: the request
+already has the form the mux can read. The ACL sits ahead of the Geyser line
+because the same `GET` also matches `is_http`. With `--tls-cert` the route
+cannot be read at all from the first byte - that is a ClientHello - so the
+same ACL and backend ride the TLS-terminating frontend
+(`tls_terminated`) ahead of `default_backend geyser_signaling`,
+deciding the decrypted request line there instead. That frontend repeats
+the content-wait pair with an `is_http` ACL of its own:
+`tcp-request inspect-delay 3s` and
+`tcp-request content accept if is_http`. In `mode tcp` the switching rules
+otherwise run at the accept event, before the decrypted bytes exist, so
+`is_packs` is never true and every request falls to Geyser - which answers
+`404` with `content-length: 0`. That is the failure mode to look for if the
+pair is dropped while moving the rule between frontends.
+
+The match is exactly `payload(0,<len>) -m beg "GET <prefix>"`, where
+`<len>` is the length of `GET ` plus the prefix: offset 0 of a fresh
+connection, which is where a resource-pack download starts. A second
+request on a kept-alive connection, an h2c preface, or an upgraded stream
+does not start there and falls through to Geyser, which answers its usual
+404/426. The supported download path starts a fresh connection for each GET.
+
+`MUX_PACKS_PREFIX` sets the prefix, `/packs/` by default. It has to be one
+literal path segment - leading and trailing `/`, only `A-Za-z0-9._~/-`, no
+`//` and no `..` - and `/` is refused because it would swallow every
+plaintext request. The backend stays in `mode tcp` like the rest of the
+mux: HAProxy reads the bytes for the ACL and forwards the connection
+unchanged. Only `--packs` takes it: that form declares a backend this scene
+does not own, so the operator is also the one who has to state the prefix
+that backend serves.
+
+`--serve-packs` declares that the backend is this entry's own and removes
+that second statement. The endpoint is `127.0.0.1:8000` (`--packs-port`
+moves the port), the prefix is the served directory's name - `server/packs`
+is `/packs/` - and the entry starts `scripts/serve-packs.sh` in a `packs`
+window with exactly those two values on its command line. Nothing in that
+mode reads `PACK_PORT` or `MUX_PACKS_PREFIX` to get them: a value with one writer and
+two readers cannot disagree with itself, but two independent readers of a
+host-level environment variable can, and the failure looks like a working
+mux plus a 503.
+
+Either form serves `server/packs/`, because the mux forwards the request path
+unchanged; without the mapping the backend would look for
+`server/packs/packs/<file>`. Set `PACK_URL` in host settings to the public address:
+
+```json
+"PACK_URL": "https://<public-host>:<port>/packs/pack-a.zip"
+```
+
+The production form uses `--tls-cert` and `https://`: the frp entry serves
+no plaintext http, so a pack URL that a remote client follows across the
+network must be TLS. The backend is still plain loopback - HAProxy
+terminates the certificate. Paper's optional `resource-pack-sha1` is empty
+in the current template; no pack integrity pin is implied by that template.
+Without `--tls-cert` the route is plaintext and the form is `http://`, for
+hosts whose entry allows it.
+
+The scene refuses both forms with a malformed endpoint, a port already used
+by `--listen`, `--java`, `--bedrock`, `--tls-listen` or `MUX_LAN_JAVA`, a
+malformed prefix, or a hand-written `--haproxy-config` (that file owns the
+whole configuration). With `--packs` it warns, without failing, when nothing
+listens on that endpoint yet: the process is not this entry's to check. With
+`--serve-packs` the same silence is a failed start, because the entry started
+that process. While the backend is down, only `<prefix>*` answers 503; Java
+and Bedrock are unaffected.
+
+`reload` only re-reads the file already on disk; it does not regenerate it.
+So rollback is `down` and then `up` without `--packs`: `up` is what rewrites
+the generated file, and it refuses while the mux is live. The other route is
+to edit `.tmp/frpc-shared-tcp/haproxy.cfg` by hand and `reload` - the next
+`up` overwrites that edit.
+
+The matcher reads a request line in HTTP/1.1 origin form. A JVM configured
+with an HTTP proxy sends an absolute-form line (`GET http://...`) and falls
+through to Geyser, as do keep-alive reuse, h2c, and HTTPS.
 
 ### 10.2 Keeping the certificate for the shared port current (Linux only)
 

@@ -18,11 +18,13 @@
 #        [--config <dir|file>]... [--listen HOST:PORT] \
 #        [--java HOST:PORT] [--bedrock HOST:PORT] \
 #        [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] \
-#        [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]
+#        [--proxy-protocol] [--packs HOST:PORT] [--haproxy-config FILE] \
+#        [--no-attach] [--dry-run]
 #    scripts/scenes/frpc-shared-tcp.sh up --scene <file> \
 #        [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] \
 #        [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] \
-#        [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]
+#        [--proxy-protocol] [--packs HOST:PORT] [--haproxy-config FILE] \
+#        [--no-attach] [--dry-run]
 #    scripts/scenes/frpc-shared-tcp.sh reload
 #    scripts/scenes/frpc-shared-tcp.sh down
 #    scripts/scenes/frpc-shared-tcp.sh status
@@ -71,6 +73,31 @@
 #  operator who does not want that exposure should choose a specific LAN
 #  address or supply a hand-written HAProxy configuration.
 #
+#  --packs HOST:PORT serves resource-pack downloads from the entry. Without
+#  --tls-cert the route is plaintext on the shared port: a connection whose
+#  first bytes are "GET <prefix>" goes to that backend instead of Geyser,
+#  so http://<public-ip>:<port>/packs/<file> works without TLS or a name.
+#  With --tls-cert the same backend is reached over HTTPS: HAProxy
+#  terminates TLS on the second bind and routes by URL path there, because a
+#  ClientHello cannot be read as a payload match. That frontend keeps its own
+#  tcp-request inspect-delay/content-accept pair: in tcp mode the switching
+#  rules run at the accept event, and without the wait the payload buffer is
+#  still empty, so the pack rule never fires and everything falls to Geyser.
+#  MUX_PACKS_PREFIX sets the prefix (default /packs/; it must start and end
+#  with "/"). The TLS
+#  branches, the plaintext Geyser branch and Java are untouched. The
+#  backend is somebody else's process: this scene forwards to it and
+#  reports whether it is reachable, nothing more.
+#
+#  --serve-packs is the same route with the backend declared as this
+#  entry's own: it starts scripts/serve-packs.sh in a 'packs' window,
+#  'down' stops it with the session, and 'status' says whether that
+#  window is up. The endpoint comes from --packs-port (default 8000),
+#  so the ACL and the pack server take their port and prefix from this
+#  command line and nowhere else - not from an environment variable
+#  each, which is how they could disagree while both looked correct. It
+#  cannot be combined with --packs: one route, one owner.
+#
 #  With --tls-cert the scene terminates TLS itself: the shared port
 #  keeps the ClientHello on a second loopback bind (--tls-listen)
 #  where HAProxy decrypts it and hands the plain bytes to Geyser. The
@@ -80,8 +107,9 @@
 #  --tls-cert may be given more than once: every file becomes one `crt`
 #  on that bind and HAProxy picks between them by SNI, which is what
 #  serving several names - several accounts, each with its own
-#  provider-issued certificate - on one port needs. A name no
-#  certificate covers falls back to the first one, unless
+#  provider-issued certificate - on one port needs. The first `crt` is
+#  the default certificate, so pass the name you advertise first; a
+#  handshake with no covered SNI is answered with it, unless
 #  --strict-sni makes such a handshake fail. Java carries no SNI, so
 #  none of this changes how Java traffic is routed.
 #
@@ -122,6 +150,7 @@ set -eu
 
 SERVER_WINDOW=server
 MUX_WINDOW=mux
+PACKS_WINDOW=packs
 SESSION=asp-frpc-shared
 HAPROXY=${HAPROXY:-haproxy}
 MUX_READY_TIMEOUT=${MUX_READY_TIMEOUT:-10}
@@ -131,6 +160,16 @@ MUX_BEDROCK=${MUX_BEDROCK:-127.0.0.1:19132}
 MUX_TLS_LISTEN=${MUX_TLS_LISTEN:-127.0.0.1:25567}
 MUX_LAN_JAVA=${MUX_LAN_JAVA:-0.0.0.0:25564}
 MUX_STOP_TIMEOUT=${MUX_STOP_TIMEOUT:-10}
+# The pack route's prefix is not an operator input: it is the name the
+# served directory has in the URL. Deriving it here keeps the ACL and the
+# pack server on one value; MUX_PACKS_PREFIX stays as the override for a
+# foreign backend whose URL shape this repository does not own.
+PACKS_PREFIX=${MUX_PACKS_PREFIX:-/packs/}
+MUX_PACKS_PORT=${MUX_PACKS_PORT:-8000}
+# The directory the pack server serves. Its basename is the URL path, so it
+# lives here, next to the prefix it produces, rather than being repeated as
+# a literal in the window command.
+PACKS_DIR=${MUX_PACKS_DIR:-server/packs}
 
 # Captured before the C locale below, which belongs to this script alone.
 _caller_locale=${LC_ALL-}
@@ -184,9 +223,20 @@ if ! ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." 2>/dev/null && pwd -P); then
 fi
 
 FRPC_SH=$SCRIPT_DIR/frpc.sh
+# The pack directory is named the way the repository names it ("server/packs")
+# and resolved against the repository root, not the operator's cwd, because
+# the window that serves it starts in that root.
+case "$PACKS_DIR" in
+    /*)
+        ;;
+    *)
+        PACKS_DIR=$ROOT/$PACKS_DIR
+        ;;
+esac
 DEFAULT_HAPROXY_CONFIG=$ROOT/.tmp/frpc-shared-tcp/haproxy.cfg
 DEFAULT_HAPROXY_PID=$ROOT/.tmp/frpc-shared-tcp/haproxy.pid
 DEFAULT_CERT_STATE=$ROOT/.tmp/frpc-shared-tcp/certs
+DEFAULT_PACKS_STATE=$ROOT/.tmp/frpc-shared-tcp/packs
 # What 'status' reads. 'up --haproxy-config' says it for one run, so the
 # variable is how a status call sees the same file.
 MUX_HAPROXY_CONFIG=${MUX_HAPROXY_CONFIG:-$DEFAULT_HAPROXY_CONFIG}
@@ -195,6 +245,10 @@ MUX_PIDFILE=${MUX_PIDFILE:-$DEFAULT_HAPROXY_PID}
 # The certificate inventory 'up' writes and 'status' reads. It is evidence
 # of what this scene validated, not another source of HAProxy configuration.
 MUX_CERT_STATE=${MUX_CERT_STATE:-$DEFAULT_CERT_STATE}
+# What 'status' needs to describe the pack route: which mode it was started
+# in, and the two values the ACL was written from. It is evidence, not a
+# second source of configuration - nothing reads it to build the mux.
+MUX_PACKS_STATE=${MUX_PACKS_STATE:-$DEFAULT_PACKS_STATE}
 MUX_CERT_WARN_DAYS=${MUX_CERT_WARN_DAYS:-7}
 # The command that sends the reload signal; a variable so a test can stand in
 # for it, the same way HAPROXY can point at another binary.
@@ -224,12 +278,23 @@ case "$MUX_CERT_STATE" in
         MUX_CERT_STATE=$_cert_cwd/$MUX_CERT_STATE
         ;;
 esac
+case "$MUX_PACKS_STATE" in
+    /*)
+        ;;
+    *)
+        if ! _packs_cwd=$(CDPATH= cd -- . 2>/dev/null && pwd -P); then
+            echo "[frpc-shared] ERROR: cannot resolve the current directory" >&2
+            exit 1
+        fi
+        MUX_PACKS_STATE=$_packs_cwd/$MUX_PACKS_STATE
+        ;;
+esac
 
 usage() {
     printf '%s\n' \
         'Usage:' \
-        '  scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> [--config <dir|file>]... [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]' \
-        '  scripts/scenes/frpc-shared-tcp.sh up --scene <file> [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] [--proxy-protocol] [--haproxy-config FILE] [--no-attach] [--dry-run]' \
+        '  scripts/scenes/frpc-shared-tcp.sh up --config <dir|file> [--config <dir|file>]... [--world NAME] [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] [--proxy-protocol] [--packs HOST:PORT | --serve-packs [--packs-port PORT]] [--haproxy-config FILE] [--no-attach] [--dry-run]' \
+        '  scripts/scenes/frpc-shared-tcp.sh up --scene <file> [--world NAME] [--listen HOST:PORT] [--java HOST:PORT] [--bedrock HOST:PORT] [--tls-cert FILE]... [--tls-listen HOST:PORT] [--strict-sni] [--proxy-protocol] [--packs HOST:PORT | --serve-packs [--packs-port PORT]] [--haproxy-config FILE] [--no-attach] [--dry-run]' \
         '  scripts/scenes/frpc-shared-tcp.sh reload' \
         '  scripts/scenes/frpc-shared-tcp.sh down' \
         '  scripts/scenes/frpc-shared-tcp.sh status' \
@@ -321,6 +386,30 @@ is_endpoint() {
     esac
 }
 
+# A prefix that can go into a payload match as literal text: one leading
+# and one trailing slash, no character HAProxy would split or quote, and
+# no empty or parent segment. "/" itself is refused because it would
+# swallow every plaintext HTTP request instead of only pack downloads.
+is_packs_prefix() {
+    _pp_prefix=$1
+    case "$_pp_prefix" in
+        /|'')
+            return 1
+            ;;
+        /*/)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    case "$_pp_prefix" in
+        *[!A-Za-z0-9._~/-]*|*//*|*..*)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
 # Print the generated HAProxy config for one listen/java/bedrock set.
 # A non-empty $4 turns on TLS termination: the ClientHello is handed to a
 # second bind ($5) that HAProxy decrypts with the PEMs in $4 (one per line,
@@ -330,7 +419,10 @@ is_endpoint() {
 # protocol v2 on the shared port: `accept-proxy` on its bind and
 # `send-proxy-v2` to the Java backend, so Paper sees the real client address
 # instead of 127.0.0.1. $8, when non-empty, is a plain LAN Java bind that
-# reaches that same Java backend, which supplies the header for it.
+# reaches that same Java backend, which supplies the header for it. $9,
+# when non-empty, is a resource-pack server endpoint and $10 the path
+# prefix to accept for it: one payload ACL on the shared port routes those
+# plaintext requests there, and nothing else in the file moves.
 print_haproxy_config() {
     _ph_listen=$1
     _ph_java=$2
@@ -339,6 +431,18 @@ print_haproxy_config() {
     _ph_tls_listen=$5
     _ph_strict_sni=$6
     _ph_lan_java=$8
+    _ph_packs_endpoint=${9:-}
+    _ph_packs_prefix=${10:-}
+    # One spelling of "this connection starts with an HTTP request line".
+    # Both frontends that can see a request line read this value: the shared
+    # port (plaintext) and the terminated port (after TLS). Two copies drift,
+    # and the drift is silent - a method missing from one list falls through
+    # to Geyser instead of the pack backend.
+    _ph_http_methods='payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "'
+    if [ -n "$_ph_packs_endpoint" ]; then
+        _ph_packs_match="GET $_ph_packs_prefix"
+        _ph_packs_len=${#_ph_packs_match}
+    fi
     _ph_accept_proxy=
     _ph_send_proxy=
     if [ "${7:-0}" -eq 1 ]; then
@@ -379,15 +483,27 @@ defaults
 frontend mc_shared
     bind $_ph_listen$_ph_accept_proxy
     acl is_tls req.ssl_hello_type 1
-    acl is_http payload(0,4) -m beg "GET " "POST" "HEAD" "PUT " "OPTI" "PATC" "DELE" "CONN" "TRAC" "PRI "
+    acl is_http $_ph_http_methods
     acl is_java payload(0,1) -m bin fe
     acl is_java payload(1,1) -m bin 00
+EOF
+    if [ -n "$_ph_packs_endpoint" ] && [ -z "$_ph_tls_certs" ]; then
+        cat <<EOF
+    acl is_packs payload(0,$_ph_packs_len) -m beg "$_ph_packs_match"
+EOF
+    fi
+    cat <<EOF
     tcp-request inspect-delay 3s
     tcp-request content accept if is_tls or is_http or is_java
 EOF
+    if [ -n "$_ph_packs_endpoint" ] && [ -z "$_ph_tls_certs" ]; then
+        cat <<EOF
+    use_backend packs if is_packs
+EOF
+    fi
     if [ -n "$_ph_tls_certs" ]; then
         cat <<EOF
-    use_backend geyser_tls if is_tls
+    use_backend tls_termination if is_tls
     use_backend geyser_signaling if is_http
 EOF
     else
@@ -418,22 +534,45 @@ EOF
         cat <<EOF
 
 # TLS is terminated here, not in Geyser: the decrypted stream reaches the
-# same signalling backend byte for byte.
-backend geyser_tls
+# same signalling backend byte for byte. The two names below describe the
+# stage, not an owner - this half serves Java signalling and the pack route
+# alike.
+backend tls_termination
     server termination $_ph_tls_listen
 
-frontend geyser_tls_termination
+frontend tls_terminated
 EOF
         if [ "$_ph_cert_names" -gt 1 ]; then
             cat <<EOF
     # $_ph_cert_names names on one bind: HAProxy chooses the certificate by
-    # SNI. A ClientHello no certificate covers is served the first one,
-    # unless strict-sni is set.
+    # SNI. A ClientHello that carries no covered name is answered with the
+    # first `crt` on the bind, unless strict-sni is set - so put the name you
+    # advertise first.
 EOF
         fi
         cat <<EOF
     bind $_ph_tls_listen ssl$_ph_crt_args$_ph_sni_arg
+EOF
+        if [ -n "$_ph_packs_endpoint" ]; then
+            cat <<EOF
+    acl is_http $_ph_http_methods
+    acl is_packs payload(0,$_ph_packs_len) -m beg "$_ph_packs_match"
+    # Wait for the decrypted request line before switching: dropping this
+    # pair makes is_packs false forever and sends every pack GET to Geyser.
+    tcp-request inspect-delay 3s
+    tcp-request content accept if is_http
+    use_backend packs if is_packs
+EOF
+        fi
+        cat <<EOF
     default_backend geyser_signaling
+EOF
+    fi
+    if [ -n "$_ph_packs_endpoint" ]; then
+        cat <<EOF
+
+backend packs
+    server packs $_ph_packs_endpoint
 EOF
     fi
 }
@@ -446,7 +585,8 @@ generate_haproxy_config() {
     esac
     mkdir -p "$_gh_dir" || return 1
     _gh_tmp=${_gh_cfg}.tmp.$$
-    if ! print_haproxy_config "$2" "$3" "$4" "$5" "$6" "${7:-0}" "${8:-0}" "${9:-}" > "$_gh_tmp"; then
+    if ! print_haproxy_config "$2" "$3" "$4" "$5" "$6" "${7:-0}" "${8:-0}" "${9:-}" \
+        "${10:-}" "${11:-}" > "$_gh_tmp"; then
         rm -f "$_gh_tmp"
         return 1
     fi
@@ -758,6 +898,113 @@ report_cert_inventory() {
     done < "$MUX_CERT_STATE"
 }
 
+# Record how the pack route was started: one line, "owned|foreign endpoint
+# prefix". 'status' reads it to say which mode is live and, for an owned
+# backend, which window to look at; nothing builds configuration from it.
+write_packs_state() {
+    if [ -z "$PACKS_ENDPOINT" ]; then
+        rm -f "$MUX_PACKS_STATE"
+        return 0
+    fi
+    case "$MUX_PACKS_STATE" in
+        */*)
+            _wps_dir=${MUX_PACKS_STATE%/*}
+            if [ -z "$_wps_dir" ]; then
+                _wps_dir=/
+            fi
+            ;;
+        *)
+            _wps_dir=.
+            ;;
+    esac
+    if ! mkdir -p "$_wps_dir"; then
+        return 1
+    fi
+    if [ "$PACKS_OWNED" -eq 1 ]; then
+        _wps_mode=owned
+    else
+        _wps_mode=foreign
+    fi
+    _wps_tmp=${MUX_PACKS_STATE}.tmp.$$
+    if ! printf '%s %s %s\n' "$_wps_mode" "$PACKS_ENDPOINT" "$PACKS_PREFIX" > "$_wps_tmp"; then
+        rm -f "$_wps_tmp"
+        return 1
+    fi
+    if ! mv -f "$_wps_tmp" "$MUX_PACKS_STATE"; then
+        rm -f "$_wps_tmp"
+        return 1
+    fi
+}
+
+# Say what the pack route is: who owns the backend, where it is, and whether
+# that is true right now. For an owned backend the window is the evidence -
+# it is the process this entry started; for a foreign one the listening
+# socket is all there is to see, since the process is not this entry's.
+report_packs_status() {
+    if [ ! -f "$MUX_PACKS_STATE" ]; then
+        # No state means 'up' with this version did not declare a route. The
+        # mux configuration can still have one, so report that rather than
+        # claiming there is none.
+        if [ -f "$MUX_HAPROXY_CONFIG" ]; then
+            _rp_config_line=$(grep -F '    server packs ' "$MUX_HAPROXY_CONFIG" 2>/dev/null || true)
+        else
+            _rp_config_line=
+        fi
+        if [ -n "$_rp_config_line" ]; then
+            printf '[frpc-shared] packs: %s (no state at %s; owner unknown)\n' \
+                "${_rp_config_line#"${_rp_config_line%%[![:space:]]*}"}" "$MUX_PACKS_STATE"
+        else
+            printf '[frpc-shared] packs: no route (no state at %s)\n' "$MUX_PACKS_STATE"
+        fi
+        return 0
+    fi
+    if ! _rp_line=$(head -n 1 "$MUX_PACKS_STATE" 2>/dev/null); then
+        printf '[frpc-shared] packs: WARNING cannot read %s\n' "$MUX_PACKS_STATE"
+        return 0
+    fi
+    _rp_mode=${_rp_line%% *}
+    _rp_rest=${_rp_line#* }
+    _rp_endpoint=${_rp_rest%% *}
+    _rp_prefix=${_rp_rest#* }
+    if [ "$_rp_mode" = owned ]; then
+        if [ -z "$TMUX_BIN" ]; then
+            printf '[frpc-shared] packs: owned %s under %s, window state unknown (tmux not found)\n' \
+                "$_rp_endpoint" "$_rp_prefix"
+            return 0
+        fi
+        _rp_dead=1
+        if _rp_dead=$(tmux list-panes -t "=$SESSION:$PACKS_WINDOW" -F '#{pane_dead}' 2>/dev/null); then
+            :
+        else
+            _rp_dead=1
+        fi
+        if [ "$_rp_dead" = 0 ]; then
+            printf '[frpc-shared] packs: owned %s under %s, window %s up\n' \
+                "$_rp_endpoint" "$_rp_prefix" "$PACKS_WINDOW"
+        else
+            printf '[frpc-shared] packs: owned %s under %s, window %s DEAD\n' \
+                "$_rp_endpoint" "$_rp_prefix" "$PACKS_WINDOW"
+        fi
+        return 0
+    fi
+    _rp_rc=0
+    endpoint_listen_check "$_rp_endpoint" || _rp_rc=$?
+    case "$_rp_rc" in
+        0)
+            printf '[frpc-shared] packs: foreign %s under %s, reachable\n' \
+                "$_rp_endpoint" "$_rp_prefix"
+            ;;
+        2)
+            printf '[frpc-shared] packs: foreign %s under %s, reachability unknown (no ss/netstat)\n' \
+                "$_rp_endpoint" "$_rp_prefix"
+            ;;
+        *)
+            printf '[frpc-shared] packs: foreign %s under %s, UNREACHABLE\n' \
+                "$_rp_endpoint" "$_rp_prefix"
+            ;;
+    esac
+}
+
 # Print the TLS binds of the configuration the mux reads. That line is where
 # "which certificate is being served" is actually answered, and its silence
 # is the failure mode worth breaking: reloading after writing a PEM the
@@ -866,6 +1113,7 @@ cmd_up() {
     _have_config=0
     _scene_file=
     _have_scene=0
+    _world_name=
     _no_attach=0
     _dry_run=0
     _haproxy_config=
@@ -878,6 +1126,9 @@ cmd_up() {
     JAVA=$MUX_JAVA
     BEDROCK=$MUX_BEDROCK
     LAN_JAVA=$MUX_LAN_JAVA
+    PACKS_ENDPOINT=
+    PACKS_OWNED=0
+    _packs_port_set=0
     case "$MUX_CERT_WARN_DAYS" in
         ''|*[!0-9]*)
             echo "[frpc-shared] ERROR: MUX_CERT_WARN_DAYS must be a whole number of days" >&2
@@ -895,6 +1146,20 @@ cmd_up() {
                 _config_inputs=$_config_inputs$2'
 '
                 _have_config=1
+                shift 2
+                ;;
+            --world)
+                if [ "$#" -lt 2 ] || [ -n "$_world_name" ]; then
+                    echo "[frpc-shared] ERROR: --world requires one native save name, once" >&2
+                    exit 2
+                fi
+                case "$2" in
+                    ''|*[!A-Za-z0-9_-]*)
+                        echo "[frpc-shared] ERROR: --world requires ASCII letters, digits, _ or -" >&2
+                        exit 2
+                        ;;
+                esac
+                _world_name=$2
                 shift 2
                 ;;
             --scene)
@@ -932,6 +1197,35 @@ cmd_up() {
                     exit 2
                 fi
                 BEDROCK=$2
+                shift 2
+                ;;
+            --packs)
+                if [ "$#" -lt 2 ]; then
+                    echo "[frpc-shared] ERROR: --packs needs HOST:PORT" >&2
+                    exit 2
+                fi
+                if [ "$PACKS_OWNED" -eq 1 ]; then
+                    echo "[frpc-shared] ERROR: --packs and --serve-packs are mutually exclusive" >&2
+                    exit 2
+                fi
+                PACKS_ENDPOINT=$2
+                shift 2
+                ;;
+            --serve-packs)
+                if [ -n "$PACKS_ENDPOINT" ]; then
+                    echo "[frpc-shared] ERROR: --packs and --serve-packs are mutually exclusive" >&2
+                    exit 2
+                fi
+                PACKS_OWNED=1
+                shift
+                ;;
+            --packs-port)
+                if [ "$#" -lt 2 ]; then
+                    echo "[frpc-shared] ERROR: --packs-port needs a port" >&2
+                    exit 2
+                fi
+                MUX_PACKS_PORT=$2
+                _packs_port_set=1
                 shift 2
                 ;;
             --haproxy-config)
@@ -990,6 +1284,13 @@ cmd_up() {
     if [ "$_have_scene" -eq 1 ] && [ "$_have_config" -eq 1 ]; then
         echo "[frpc-shared] ERROR: --scene and --config are mutually exclusive" >&2
         exit 2
+    fi
+    if [ -n "$_world_name" ]; then
+        if [ ! -f "$ROOT/server/$_world_name/level.dat" ] ||
+           [ -L "$ROOT/server/$_world_name" ] || [ -L "$ROOT/server/$_world_name/level.dat" ]; then
+            echo "[frpc-shared] ERROR: --world requires an existing native save at server/$_world_name/level.dat (no links)" >&2
+            exit 2
+        fi
     fi
     if [ "$_have_scene" -eq 0 ] && [ "$_have_config" -eq 0 ]; then
         echo "[frpc-shared] ERROR: up needs --config <dir|file> or --scene <file>" >&2
@@ -1087,6 +1388,64 @@ cmd_up() {
         IFS=$_old_ifs
         TLS_CERTS=$_tls_certs_resolved
     fi
+    if [ "$PACKS_OWNED" -eq 0 ] && [ "$_packs_port_set" -eq 1 ]; then
+        echo "[frpc-shared] ERROR: --packs-port needs --serve-packs" >&2
+        exit 2
+    fi
+    if [ "$PACKS_OWNED" -eq 1 ]; then
+        # The backend is this entry's own process, so its address is not an
+        # operator input: the loopback address and the one port this command
+        # line names are what the pack server is started with below.
+        case "$MUX_PACKS_PORT" in
+            ''|*[!0-9]*)
+                echo "[frpc-shared] ERROR: --packs-port must be a whole number" >&2
+                exit 2
+                ;;
+        esac
+        if [ "$MUX_PACKS_PORT" -lt 1 ] || [ "$MUX_PACKS_PORT" -gt 65535 ]; then
+            echo "[frpc-shared] ERROR: --packs-port must be 1-65535: $MUX_PACKS_PORT" >&2
+            exit 2
+        fi
+        PACKS_ENDPOINT=127.0.0.1:$MUX_PACKS_PORT
+        PACKS_PREFIX=/${PACKS_DIR##*/}/
+        if [ -n "${MUX_PACKS_PREFIX-}" ] && [ "$MUX_PACKS_PREFIX" != "$PACKS_PREFIX" ]; then
+            echo "[frpc-shared] ERROR: MUX_PACKS_PREFIX cannot be set with --serve-packs; the prefix is the served directory's name" >&2
+            exit 2
+        fi
+        if [ ! -d "$PACKS_DIR" ]; then
+            echo "[frpc-shared] ERROR: no such pack directory: $PACKS_DIR" >&2
+            exit 2
+        fi
+    fi
+    if [ -n "$PACKS_ENDPOINT" ]; then
+        # The scene owns the generated file; a hand-written one is not
+        # something it can add this route to.
+        if [ -n "$_haproxy_config" ]; then
+            echo "[frpc-shared] ERROR: --packs/--serve-packs cannot be combined with --haproxy-config" >&2
+            exit 2
+        fi
+        if ! is_endpoint "$PACKS_ENDPOINT"; then
+            echo "[frpc-shared] ERROR: not HOST:PORT (IPv6 needs brackets): $PACKS_ENDPOINT" >&2
+            exit 2
+        fi
+        # Ports, not host strings: a backend bound to another address on
+        # the same port is just as much a collision.
+        _packs_port=${PACKS_ENDPOINT##*:}
+        for _endpoint in "$LISTEN" "$JAVA" "$BEDROCK" "$TLS_LISTEN" "$LAN_JAVA"; do
+            if [ "${_endpoint##*:}" = "$_packs_port" ]; then
+                echo "[frpc-shared] ERROR: the packs backend must differ from --listen/--java/--bedrock/--tls-listen/MUX_LAN_JAVA: $PACKS_ENDPOINT" >&2
+                exit 2
+            fi
+        done
+        if ! is_packs_prefix "$PACKS_PREFIX"; then
+            if [ "$PACKS_OWNED" -eq 1 ]; then
+                echo "[frpc-shared] ERROR: the pack directory's name is not a literal URL segment: $PACKS_DIR" >&2
+            else
+                echo "[frpc-shared] ERROR: MUX_PACKS_PREFIX must be a literal /path/ of A-Za-z0-9._~/- without '//' or '..': $PACKS_PREFIX" >&2
+            fi
+            exit 2
+        fi
+    fi
     case "$MUX_READY_TIMEOUT" in
         ''|*[!0-9]*)
             echo "[frpc-shared] ERROR: MUX_READY_TIMEOUT must be a whole number of seconds" >&2
@@ -1110,6 +1469,10 @@ cmd_up() {
         done
         set +f
         IFS=$_old_ifs
+    fi
+
+    if [ -n "$_world_name" ]; then
+        set -- "$@" --world "$_world_name"
     fi
 
     if [ -n "$_haproxy_config" ]; then
@@ -1140,6 +1503,26 @@ cmd_up() {
     quote_sh "$ROOT"
     _root_quoted=$_q_result
     _server_command='bash scripts/start.sh'
+    if [ -n "$_world_name" ]; then
+        quote_sh "$_world_name"
+        _server_command="$_server_command --world $_q_result"
+    fi
+    _packs_command=
+    if [ "$PACKS_OWNED" -eq 1 ]; then
+        # Both values the pack server needs are passed as arguments, so the
+        # process has no second, independently-read source for either: the
+        # same $PACKS_ENDPOINT and $PACKS_PREFIX this script writes into the
+        # ACL above are what start it.
+        quote_sh "$ROOT/scripts/serve-packs.sh"
+        _packs_script_quoted=$_q_result
+        # The bind address is the endpoint the ACL already forwards to, taken
+        # apart rather than written a second time.
+        quote_sh "${PACKS_ENDPOINT%:*}"
+        _packs_bind_quoted=$_q_result
+        quote_sh "$PACKS_DIR"
+        _packs_dir_quoted=$_q_result
+        _packs_command="$_packs_script_quoted --bind $_packs_bind_quoted --port $MUX_PACKS_PORT --directory $_packs_dir_quoted --prefix $PACKS_PREFIX"
+    fi
     _lan_java_config=
     if [ "$PROXY_PROTOCOL" -eq 1 ] && [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
         _lan_java_config=$LAN_JAVA
@@ -1149,7 +1532,8 @@ cmd_up() {
         if [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
             printf '# frpc-shared: would generate HAProxy config %s\n' "$_haproxy_config"
             print_haproxy_config "$LISTEN" "$JAVA" "$BEDROCK" "$TLS_CERTS" "$TLS_LISTEN" \
-                "$STRICT_SNI" "$PROXY_PROTOCOL" "$_lan_java_config"
+                "$STRICT_SNI" "$PROXY_PROTOCOL" "$_lan_java_config" \
+                "$PACKS_ENDPOINT" "$PACKS_PREFIX"
         else
             printf '# frpc-shared: would use HAProxy config %s\n' "$_haproxy_config"
         fi
@@ -1159,6 +1543,13 @@ cmd_up() {
         printf 'tmux set-window-option -t <window-id> remain-on-exit on\n'
         printf 'tmux set-window-option -t <window-id> monitor-activity on\n'
         printf 'tmux respawn-window -k -t <window-id> %s\n' "$_haproxy_command"
+        if [ "$PACKS_OWNED" -eq 1 ]; then
+            printf 'tmux new-window -P -F %s -t %s -n %s -c %s -- cat\n' \
+                "'#{window_id}'" "=$SESSION" "$PACKS_WINDOW" "$_root_quoted"
+            printf 'tmux set-window-option -t <packs-window-id> remain-on-exit on\n'
+            printf 'tmux set-window-option -t <packs-window-id> monitor-activity on\n'
+            printf 'tmux respawn-window -k -t <packs-window-id> %s\n' "$_packs_command"
+        fi
         printf 'tmux set-window-option -t <server-window-id> @asp-server-deferred 0\n'
         printf 'tmux respawn-window -k -t <server-window-id> %s\n' "$_server_command"
         return 0
@@ -1197,6 +1588,17 @@ cmd_up() {
             exit 3
         fi
     fi
+    if [ "$PACKS_OWNED" -eq 1 ]; then
+        # The backend is this entry's to start, so an occupied port is a
+        # failure to report now, not a 503 for players to discover later.
+        _pre_packs_rc=0
+        endpoint_listen_check "$PACKS_ENDPOINT" || _pre_packs_rc=$?
+        if [ "$_pre_packs_rc" -eq 0 ]; then
+            printf '[frpc-shared] ERROR: something already listens on the packs backend %s; run down or stop it first\n' \
+                "$PACKS_ENDPOINT" >&2
+            exit 3
+        fi
+    fi
 
     require_frpc || exit 1
     if [ -z "$TMUX_BIN" ]; then
@@ -1230,7 +1632,8 @@ cmd_up() {
 
     if [ -z "$_haproxy_config" ] || [ "$_haproxy_config" = "$DEFAULT_HAPROXY_CONFIG" ]; then
         if ! generate_haproxy_config "$_haproxy_config" "$LISTEN" "$JAVA" "$BEDROCK" \
-            "$TLS_CERTS" "$TLS_LISTEN" "$STRICT_SNI" "$PROXY_PROTOCOL" "$_lan_java_config"; then
+            "$TLS_CERTS" "$TLS_LISTEN" "$STRICT_SNI" "$PROXY_PROTOCOL" "$_lan_java_config" \
+            "$PACKS_ENDPOINT" "$PACKS_PREFIX"; then
             echo "[frpc-shared] ERROR: cannot write HAProxy config: $_haproxy_config" >&2
             exit 1
         fi
@@ -1259,9 +1662,63 @@ cmd_up() {
         FRPC_SESSION=$SESSION "$FRPC_SH" down >/dev/null 2>&1 || true
         exit 1
     fi
+    if [ "$PACKS_OWNED" -eq 1 ]; then
+        # 2b. The pack server this entry declared. It is started after the mux
+        # and before the server, and its port and prefix are the ones already
+        # written into the ACL: one command line, two consumers.
+        if ! spawn_window "=$SESSION" "$PACKS_WINDOW" "$_packs_command"; then
+            echo "[frpc-shared] ERROR: could not create the $PACKS_WINDOW window" >&2
+            FRPC_SESSION=$SESSION "$FRPC_SH" down >/dev/null 2>&1 || true
+            exit 1
+        fi
+        _packs_ready=0
+        _packs_elapsed=0
+        while [ "$_packs_elapsed" -lt "$MUX_READY_TIMEOUT" ]; do
+            _packs_rc=0
+            endpoint_listen_check "$PACKS_ENDPOINT" || _packs_rc=$?
+            if [ "$_packs_rc" -eq 0 ]; then
+                _packs_ready=1
+                break
+            fi
+            if [ "$_packs_rc" -eq 2 ]; then
+                _packs_ready=1
+                break
+            fi
+            if ! _packs_dead=$(tmux list-panes -t "=$SESSION:$PACKS_WINDOW" -F '#{pane_dead}' 2>/dev/null); then
+                _packs_dead=1
+            fi
+            if [ "$_packs_dead" != 0 ]; then
+                break
+            fi
+            sleep 1
+            _packs_elapsed=$((_packs_elapsed + 1))
+        done
+        if [ "$_packs_ready" -eq 0 ]; then
+            printf '[frpc-shared] ERROR: the %s window did not bind %s within %ss\n' \
+                "$PACKS_WINDOW" "$PACKS_ENDPOINT" "$MUX_READY_TIMEOUT" >&2
+            if _packs_capture=$(tmux capture-pane -p -J -t "=$SESSION:$PACKS_WINDOW" 2>/dev/null); then
+                printf '%s\n' "$_packs_capture" | tail -n 20 >&2
+            fi
+            FRPC_SESSION=$SESSION "$FRPC_SH" down >/dev/null 2>&1 || true
+            exit 1
+        fi
+    elif [ -n "$PACKS_ENDPOINT" ]; then
+        # A foreign backend: the mux routes to it just the same, so a missing
+        # one is a warning, not a failed start.
+        _packs_backend_rc=0
+        endpoint_listen_check "$PACKS_ENDPOINT" || _packs_backend_rc=$?
+        if [ "$_packs_backend_rc" -eq 1 ]; then
+            printf '[frpc-shared] WARNING: nothing listens on the packs backend %s; requests under %s will get 503\n' \
+                "$PACKS_ENDPOINT" "$PACKS_PREFIX" >&2
+        fi
+    fi
     if ! write_cert_inventory; then
         printf '[frpc-shared] WARNING: cannot write certificate inventory: %s\n' \
             "$MUX_CERT_STATE" >&2
+    fi
+    if ! write_packs_state; then
+        printf '[frpc-shared] WARNING: cannot write the pack route state: %s\n' \
+            "$MUX_PACKS_STATE" >&2
     fi
 
     # 3. Only now start the server, the last prerequisite.
@@ -1306,6 +1763,7 @@ cmd_down() {
     stop_mux || _down_status=1
     rm -f "$MUX_PIDFILE"
     rm -f "$MUX_CERT_STATE"
+    rm -f "$MUX_PACKS_STATE"
     return "$_down_status"
 }
 
@@ -1365,6 +1823,7 @@ cmd_status() {
     report_mux_status
     report_mux_tls
     report_cert_inventory
+    report_packs_status
     require_frpc || exit 1
     FRPC_SESSION=$SESSION "$FRPC_SH" status
 }

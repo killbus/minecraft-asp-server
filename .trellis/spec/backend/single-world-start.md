@@ -17,6 +17,8 @@ scripts/start.cmd [--world NAME] [-pause]
 scripts/backup.sh [SERVER_DIR]
 scripts/backup.cmd [SERVER_DIR]
 scripts/backup-debug.cmd [SERVER_DIR]
+scripts/scenes/frpc.sh up (--config PATH | --scene FILE) [--world NAME] ...
+scripts/scenes/frpc-shared-tcp.sh up (--config PATH | --scene FILE) [--world NAME] ...
 ```
 
 Without selection, pass no world argument so `server.properties` remains
@@ -30,6 +32,11 @@ Forward selection as Paper's native `--world NAME`. Preserve Java exit status,
 existing heap arguments, Windows `-pause`, `ASP_SKIP_BACKUP`, and the default
 60-minute pre-start backup interval. Selection never edits saves or properties.
 Operators stop the previous process before calling a launcher.
+
+Both optional scenes validate explicit selection before starting any sidecar
+and forward the quoted argument to the same launcher. A plain scene with
+`server = false` refuses selection unless `--defer-server` reserves the server
+for composition. No argument preserves the previous default command exactly.
 
 Capture CMD arguments with `%~1` inside the quoted `set` command; raw `%1`
 retains outer quotes and can expose a quoted `&` as a command separator.
@@ -58,6 +65,11 @@ Exclude `session.lock` and `level.dat_old` throughout save trees. Detect
 `paper-server.jar` in the offline preflight. The debug CMD delegates to the
 normal CMD implementation so it cannot drift.
 
+Host `settings/` enters snapshots except `*.example.json`; `SETTINGS_DIR`
+overrides that source. Regenerable pack files remain excluded. Native saves
+named `config`, `plugins` or `settings` collide with snapshot destinations and
+are refused before any copy rather than being merged with unrelated state.
+
 ## Executable checks
 
 `tests/test_single_world_scripts.py` runs the real shell/CMD entrypoints with
@@ -73,6 +85,8 @@ stand-in Java/process probes and isolated fixtures under `.tmp/`. Verify:
   snapshots; unrelated directories, runtime files and known caches do not.
 - Manifests hash every copied file; online Paper detection refuses snapshots.
 - `tests/test_verify_runtime.py` still passes with the Paper canonical path.
+- `tests/test_single_world_scenes.py` covers selection forwarding, validation
+  before tmux, default behavior, server-less refusal and TLS/PROXY/owned packs.
 
 Native option support was inspected read-only in the available build's
 `org.bukkit.craftbukkit.Main$1`: `w`, `world`, `level-name` share one required

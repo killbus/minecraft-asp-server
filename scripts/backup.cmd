@@ -8,6 +8,7 @@ REM
 REM  Scope (see docs/SINGLE-WORLD-SOP.md):
 REM    native saves + whitelist/ban/usercache/ops json + server config
 REM    + config/ (Paper) + per-plugin config dirs (jars excluded)
+REM    + settings/*.json (per-host coordinates; *.example.json excluded)
 REM    Known-regenerable plugin caches are excluded (see below).
 REM  Output: <target>\<UTC timestamp>\ with MANIFEST.txt
 REM
@@ -26,6 +27,7 @@ REM    KEEP                  complete backups kept per target (default 5)
 REM    BACKUP_MIN_INTERVAL   skip when every target already has a complete
 REM                          backup younger than this many minutes
 REM                          (default 0 = never skip)
+REM    SETTINGS_DIR          per-host settings source (default ..\settings)
 REM    BACKUP_REQUIRE_ALL=1  a failed mirror fails the run (default 0)
 REM    ALLOW_ONLINE=1        proceed even though the server is running
 REM ============================================================
@@ -52,6 +54,7 @@ if defined BACKUP_ROOT set "BACKUP_TARGETS=%BACKUP_ROOT%"
 if not defined KEEP set "KEEP=5"
 if not defined BACKUP_MIN_INTERVAL set "BACKUP_MIN_INTERVAL=0"
 if not defined BACKUP_REQUIRE_ALL set "BACKUP_REQUIRE_ALL=0"
+if not defined SETTINGS_DIR set "SETTINGS_DIR=%~dp0..\settings"
 if "%~1"=="" (set "SERVER_DIR=%~dp0..\server") else (set "SERVER_DIR=%~1")
 set "ERRMSG="
 
@@ -66,6 +69,11 @@ set "RESULT=1"
 REM --- preflight ---
 if not exist "%SERVER_DIR%\paper-server.jar" (
     echo [backup] ERROR: not a server dir: %SERVER_DIR% ^(paper-server.jar missing^)
+    goto :finish
+)
+
+for %%d in (config plugins settings) do if exist "%SERVER_DIR%\%%d\level.dat" (
+    echo [backup] ERROR: native save collides with snapshot directory: %%d
     goto :finish
 )
 
@@ -103,16 +111,19 @@ if %TGT_N% equ 0 (
 REM Refuse a torn snapshot: the Paper server must be stopped while we copy.
 REM Match the real launch shape (`java ... -jar ...\paper-server.jar`) so an
 REM unrelated process that merely mentions the file name is not a false hit.
-powershell -NoProfile -Command "if (Get-CimInstance Win32_Process -Filter 'Name=''java.exe''' -ErrorAction Stop | Where-Object { $_.CommandLine -match '-jar\s+.*paper-server\.jar' }) { exit 2 } else { exit 0 }"
-if errorlevel 1 if not errorlevel 2 (
-    echo [backup] ERROR: cannot inspect running Java processes
-    goto :finish
+powershell -NoProfile -Command "try { $p = Get-CimInstance Win32_Process -Filter 'Name=''java.exe''' -ErrorAction Stop | Where-Object { $_.CommandLine -match '-jar\s+.*paper-server\.jar' }; if ($p) { exit 2 } } catch { exit 3 }; exit 0"
+if %errorlevel% equ 3 (
+    echo [backup] ERROR: cannot determine whether the Paper server is running
+    if not "%ALLOW_ONLINE%"=="1" goto :finish
+    echo [backup] WARN: ALLOW_ONLINE=1 - running check skipped
+    goto :running_check_done
 )
 if errorlevel 2 if not "%ALLOW_ONLINE%"=="1" (
     echo [backup] ERROR: the Paper server is running; stop it first ^(or set ALLOW_ONLINE=1^)
     goto :finish
 )
 if errorlevel 2 echo [backup] WARN: ALLOW_ONLINE=1 - snapshot may be inconsistent
+:running_check_done
 
 REM --- optional: skip only when EVERY target is already up to date ---
 REM A target that fell behind (unplugged disk, new target added) forces a
@@ -201,7 +212,7 @@ for /d %%w in ("%SERVER_DIR%\*") do if exist "%%w\level.dat" if not exist "%%w\l
 if defined ERRMSG goto :dt_fail
 
 REM --- player files + server-level config ---
-for %%f in (whitelist.json ops.json banned-ips.json banned-players.json usercache.json server.properties eula.txt bukkit.yml spigot.yml commands.yml server-icon.png) do copy /Y "%SERVER_DIR%\%%f" "%DEST%\" >nul 2>nul
+for %%f in (whitelist.json ops.json banned-ips.json banned-players.json usercache.json server.properties eula.txt bukkit.yml spigot.yml commands.yml permissions.yml server-icon.png) do copy /Y "%SERVER_DIR%\%%f" "%DEST%\" >nul 2>nul
 
 REM --- Paper config dir (paper-global.yml, paper-world-defaults.yml) ---
 if exist "%SERVER_DIR%\config" (
@@ -211,7 +222,7 @@ if exist "%SERVER_DIR%\config" (
 if defined ERRMSG goto :dt_fail
 
 REM --- plugin dirs: config + data, jars excluded ---
-REM Only caches proven regenerable in docs/ASP-SOP.md section 1 are
+REM Only caches proven regenerable in docs/SINGLE-WORLD-SOP.md are
 REM excluded. Do not widen this to every */cache/: a plugin may keep
 REM real state in a directory with that name.
 for /d %%d in ("%SERVER_DIR%\plugins\*") do (
@@ -223,6 +234,20 @@ for /d %%d in ("%SERVER_DIR%\plugins\*") do (
 )
 if defined ERRMSG goto :dt_fail
 copy /Y "%SERVER_DIR%\plugins\*.yml" "%DEST%\plugins\" >nul 2>nul
+
+REM --- per-host settings: untracked, so the snapshot is their only copy ---
+REM git tracks settings\*.example.json only. The file that fills the
+REM placeholders is host state, not source: it cannot be reconstructed from
+REM the repository, and it is what explains the rendered server.properties
+REM and plugin yml beside it. See docs\SINGLE-WORLD-SOP.md.
+if exist "%SETTINGS_DIR%" (
+    robocopy "%SETTINGS_DIR%" "%DEST%\settings" /MIR /XF *.example.json /NFL /NDL /NJH /NJS /NP >nul
+    if errorlevel 8 set "ERRMSG=settings copy failed (robocopy exit !errorlevel!)"
+)
+if defined ERRMSG goto :dt_fail
+
+REM Resource packs under packs/ are externally sourced and regenerable; they
+REM stay out of the snapshot. Preserve their external source and hash.
 
 REM --- manifest: hash every backed-up file (world included) ---
 powershell -NoProfile -Command "$d=(Resolve-Path -LiteralPath $env:DEST).Path; $o=@('# Paper backup ' + $env:TS); $sha=[System.Security.Cryptography.SHA256]::Create(); $fs=[System.IO.Directory]::GetFiles($d,'*',[System.IO.SearchOption]::AllDirectories); [Array]::Sort($fs,[System.StringComparer]::Ordinal); foreach ($f in $fs) { if ([System.IO.Path]::GetFileName($f) -ne 'MANIFEST.txt') { $s=[System.IO.File]::OpenRead($f); $h=([System.BitConverter]::ToString($sha.ComputeHash($s)) -replace '-','').ToLower(); $s.Dispose(); $rel=$f.Substring($d.Length+1).Replace([char]92,'/'); $o += ('{0}  ./{1}' -f $h, $rel) } }; [System.IO.File]::WriteAllText((Join-Path $d 'MANIFEST.txt'), (($o -join [char]10) + [char]10), [System.Text.Encoding]::ASCII)"

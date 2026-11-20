@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"Deployment contracts after port"}
+{"file":".trellis/spec/backend/single-world-start.md","reason":"Existing launcher and save isolation boundary"}
+{"file":".trellis/spec/backend/config-bundle.md","reason":"Source allowlist, host settings and native pack rendering"}
+{"file":".trellis/spec/backend/runtime-inventory.md","reason":"Pinned installer and shared verifier contract"}
+{"file":".trellis/spec/backend/frpc-scenes.md","reason":"Shared transport, sidecar ownership and world forwarding"}
+{"file":".trellis/tasks/11-20-single-world-deployment/research/compatibility.md","reason":"Adaptation and data preservation risks"}
+{"file":".trellis/tasks/11-20-single-world-deployment/prd.md","reason":"No multi-world plugins and safe operator deployment"}

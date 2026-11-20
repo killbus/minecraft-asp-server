@@ -281,14 +281,20 @@ class SingleWorldScriptsTests(unittest.TestCase):
                     "Sibling_nether/dimensions/minecraft/the_nether/region/r.0.0.mca",
                     "config/paper-global.yml", "plugins/Example/cache/important.db",
                     "plugins/Example/config.yml", "plugins/Geyser-Spigot/config.yml",
-                    "whitelist.json", "server.properties"]
+                    "whitelist.json", "server.properties", "permissions.yml"]
         excluded = ["Adventure_A/session.lock", "Puzzle-2/level.dat_old",
                     "Puzzle-2/dimensions/minecraft/overworld/session.lock",
                     "plugins/Example/helper.jar", "plugins/extra.jar", "paper-server.jar",
                     "plugins/Geyser-Spigot/cache/generated", "plugins/SkinsRestorer/cache/generated",
-                    "libraries/dependency.jar", "logs/latest.log", "unrelated/notes.txt"]
+                    "libraries/dependency.jar", "logs/latest.log", "unrelated/notes.txt",
+                    "packs/pack-a.zip"]
         for relative in included + excluded:
             self.write(relative, relative.encode())
+        settings = self.directory / "settings"
+        settings.mkdir()
+        (settings / "host.json").write_bytes(b'{"schema_version":1,"values":{"PACK_URL":""}}')
+        (settings / "host.example.json").write_bytes(b"example")
+        self.environment["SETTINGS_DIR"] = settings.as_posix()
         result = self.run_script(entrypoint, self.server.as_posix())
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         completed = list(self.backups.glob("*/COMPLETE"))
@@ -299,6 +305,8 @@ class SingleWorldScriptsTests(unittest.TestCase):
         for relative in excluded:
             self.assertFalse((backup / relative).exists(), relative)
         self.assertFalse((backup / "world").exists())
+        self.assertEqual((settings / "host.json").read_bytes(), (backup / "settings/host.json").read_bytes())
+        self.assertFalse((backup / "settings/host.example.json").exists())
         manifest = (backup / "MANIFEST.txt").read_text()
         for path in backup.rglob("*"):
             if path.is_file() and path.name not in ("MANIFEST.txt", "COMPLETE"):
@@ -316,6 +324,16 @@ class SingleWorldScriptsTests(unittest.TestCase):
 
     def test_debug_backup_uses_same_scope(self):
         self.check_backup("backup-debug.cmd")
+
+    def test_backup_refuses_native_save_and_snapshot_directory_collision(self):
+        for entrypoint in ("backup.sh", "backup.cmd", "backup-debug.cmd"):
+            with self.subTest(entrypoint=entrypoint):
+                self.prepare("sh" if entrypoint.endswith(".sh") else "cmd")
+                self.write("settings/level.dat", b"native save")
+                result = self.run_script(entrypoint, self.server.as_posix())
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertIn("collides with snapshot directory", result.stdout + result.stderr)
+                self.assertFalse(self.backups.exists())
 
     def check_online_refusal(self, shell):
         self.prepare(shell)

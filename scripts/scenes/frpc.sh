@@ -135,8 +135,8 @@ fi
 usage() {
     printf '%s\n' \
         'Usage:' \
-        '  scripts/scenes/frpc.sh up --config <dir|file> [--config <dir|file>]... [--no-attach] [--defer-server] [--dry-run]' \
-        '  scripts/scenes/frpc.sh up --scene <file> [--no-attach] [--defer-server] [--dry-run]' \
+        '  scripts/scenes/frpc.sh up --config <dir|file> [--config <dir|file>]... [--world NAME] [--no-attach] [--defer-server] [--dry-run]' \
+        '  scripts/scenes/frpc.sh up --scene <file> [--world NAME] [--no-attach] [--defer-server] [--dry-run]' \
         '  scripts/scenes/frpc.sh down' \
         '  scripts/scenes/frpc.sh status' \
         '  scripts/scenes/frpc.sh attach' \
@@ -715,6 +715,7 @@ cmd_up() {
     _defer_server=0
     _dry_run=0
     _records_have_binary=0
+    _world_name=
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -739,6 +740,20 @@ cmd_up() {
                 fi
                 _scene_file=$2
                 _have_scene=1
+                shift 2
+                ;;
+            --world)
+                if [ "$#" -lt 2 ] || [ -n "$_world_name" ]; then
+                    echo "[frpc] ERROR: --world requires one native save name, once" >&2
+                    exit 2
+                fi
+                case "$2" in
+                    ''|*[!A-Za-z0-9_-]*)
+                        echo "[frpc] ERROR: --world requires ASCII letters, digits, _ or -" >&2
+                        exit 2
+                        ;;
+                esac
+                _world_name=$2
                 shift 2
                 ;;
             --no-attach)
@@ -820,6 +835,19 @@ cmd_up() {
     quote_sh "$ROOT"
     _root_quoted=$_q_result
     _server_command='bash scripts/start.sh'
+    if [ -n "$_world_name" ]; then
+        if [ "$_want_server" -eq 0 ]; then
+            echo "[frpc] ERROR: --world requires a scene that starts a server" >&2
+            exit 2
+        fi
+        if [ ! -f "$ROOT/server/$_world_name/level.dat" ] ||
+           [ -L "$ROOT/server/$_world_name" ] || [ -L "$ROOT/server/$_world_name/level.dat" ]; then
+            echo "[frpc] ERROR: --world requires an existing native save at server/$_world_name/level.dat (no links)" >&2
+            exit 2
+        fi
+        quote_sh "$_world_name"
+        _server_command="$_server_command --world $_q_result"
+    fi
 
     if [ "$_dry_run" -eq 1 ]; then
         # 1 means the next record creates the session as its initial window.
