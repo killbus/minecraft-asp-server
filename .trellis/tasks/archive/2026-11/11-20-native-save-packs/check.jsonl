@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/single-world-start.md","reason":"Review launcher compatibility and source-save preservation."}
+{"file":".trellis/spec/backend/config-bundle.md","reason":"Check host policy/source/runtime state boundaries."}

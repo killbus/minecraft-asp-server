@@ -282,3 +282,74 @@ Adapt later deployment commits on feat/single-world-start. Native packs, protect
 ### Next Steps
 
 - Operator tests the published branch on a stopped deployment using SINGLE-WORLD-SOP.
+
+
+## Session 11: Select native resource packs by startup save
+<!-- trellis-session: v=2 fp=77a259d1dab08ff3 -->
+
+**Date**: 2026-11-20
+**Task**: Select native resource packs by startup save
+**Branch**: `feat/single-world-start`
+
+### Summary
+
+Add optional host pack policy with global fallback, per-save overrides and SHA-1 caching; document full original save deployment.
+
+### Main Changes
+
+- Keep canonical properties unchanged through generated native config when pack policy is enabled.
+- Record fresh-map provenance and bounded Nether tick conversion caveat.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8894cce` | feat(server): select native resource packs by startup save |
+| `432ec36` | docs(sop): document a fresh Trials save deployment |
+
+### Testing
+
+- [OK] 93 scoped tests passed; 3005 Java Properties differential cases matched.
+- [OK] Native Paper config selection and Java 26.2/26.3 cache transfer probes passed.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Pull feat/single-world-start on the host, configure resource_packs in ignored minecraft-server.json and prepare the complete save before restart.
+
+
+## Session 12: Unify host resource-pack settings
+<!-- trellis-session: v=2 fp=40651d6cc5e14302 -->
+
+**Date**: 2026-11-20
+**Task**: Unify host resource-pack settings
+**Branch**: `feat/single-world-start`
+
+### Summary
+
+Consolidate startup resource-pack policy into minecraft-server.json with shared schema decoding and isolated renderer/startup consumers; fold the correction into the published feature by explicit user-authorized fixup/rebase.
+
+### Main Changes
+
+- Retain native fallback without inspecting properties when no pack policy exists; refuse leftover standalone policies with migration guidance.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8894cce` | feat(server): select native resource packs by startup save |
+
+### Testing
+
+- [OK] 109 scoped tests pass with no skips; Bash, AST, schema and whitespace checks pass. No production/live-client test in this correction.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Reconcile the rewritten test branch on the deployment host; merge any former standalone pack policy into resource_packs before startup.

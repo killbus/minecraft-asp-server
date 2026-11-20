@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/config-bundle.md","reason":"Verify shared settings contract and compatibility."}
+{"file":".trellis/spec/backend/single-world-start.md","reason":"Review launcher parity, fallback and property-preservation behavior."}

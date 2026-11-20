@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/single-world-start.md","reason":"Preserve native startup/save/backup contract; task design extends only optional pack selection."}
+{"file":".trellis/spec/backend/config-bundle.md","reason":"Reuse URL/JSON rules and preserve existing configuration application boundaries."}
