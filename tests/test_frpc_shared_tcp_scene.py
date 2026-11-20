@@ -960,6 +960,29 @@ class SharedTcpSceneTests(unittest.TestCase):
 
         self.assertTrue(listener.endswith(" strict-sni"), listener)
 
+    def test_multiple_certificate_comment_never_executes_crt(self):
+        first = self.pem("certs/first.pem")
+        second = self.pem("certs/second.pem")
+        stubs = self.directory / "stubs"
+        stubs.mkdir()
+        marker = self.directory / "crt-executed"
+        self.executable(stubs, "crt", '#!/bin/sh\n: > "$CRT_SENTINEL"\nprintf "unexpected-crt-output\\n"\n')
+        result = self.run_scene(
+            "--dry-run", "--tls-cert", first.as_posix(), "--tls-cert", second.as_posix(),
+            "--strict-sni", env={
+                "PATH": os.pathsep.join([stubs.as_posix(), os.environ["PATH"]]),
+                "CRT_SENTINEL": marker.as_posix(),
+            },
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertFalse(marker.exists(), "a generated HAProxy comment must not run a shell command")
+        self.assertNotIn("unexpected-crt-output", result.stdout + result.stderr)
+        self.assertNotIn("crt: not found", result.stderr)
+        self.assertEqual(
+            f"    bind 127.0.0.1:25567 ssl crt {self.posix_path(first)} crt {self.posix_path(second)} strict-sni",
+            self.terminating_bind(result.stdout.splitlines()),
+        )
+
     def test_strict_sni_without_a_certificate_is_rejected(self):
         errors = self.assert_rejected("--strict-sni")
 

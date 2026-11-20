@@ -546,7 +546,7 @@ EOF
             cat <<EOF
     # $_ph_cert_names names on one bind: HAProxy chooses the certificate by
     # SNI. A ClientHello that carries no covered name is answered with the
-    # first `crt` on the bind, unless strict-sni is set - so put the name you
+    # first crt on the bind, unless strict-sni is set - so put the name you
     # advertise first.
 EOF
         fi

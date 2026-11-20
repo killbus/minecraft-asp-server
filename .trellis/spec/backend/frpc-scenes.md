@@ -117,6 +117,13 @@ The scene must still make the input's validity observable:
 Replacing a PEM requires the existing `reload` verb to make HAProxy read it.
 The scene does not watch files or reload on its own.
 
+Generated configuration comments are data inside shell heredocs. In an
+unquoted `<<EOF`, a leading `#` does not disable command substitution: backticks
+around `crt` execute a command while generating the multi-certificate comment.
+Use plain literal words there while retaining intentional variable expansion
+for the bind and certificate arguments. Shell syntax checks alone do not detect
+this runtime error.
+
 #### Resource-pack route (opt-in, plaintext or TLS)
 
 `--packs HOST:PORT` adds a destination for resource-pack downloads on the
@@ -376,6 +383,8 @@ config = udp.toml
 - a hand-written config keeps ownership of its whole file.
 - a parseable certificate reports subject and expiry; one inside
   `MUX_CERT_WARN_DAYS` warns without preventing `--dry-run` or startup;
+- two certificate inputs preserve both `crt` bind arguments and `strict-sni`
+  without executing a `crt` command or emitting a command-not-found diagnostic;
 - `status` reads `MUX_CERT_STATE` and reports the inventory written by
   `up`; malformed `MUX_CERT_WARN_DAYS` is rejected.
 
