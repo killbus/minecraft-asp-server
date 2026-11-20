@@ -1,0 +1,22 @@
+{
+  "id": "single-world-deployment",
+  "name": "single-world-deployment",
+  "title": "Restore deployment capabilities for single-world startup",
+  "status": "completed",
+  "priority": "P2",
+  "creator": "killbus",
+  "assignee": "killbus",
+  "createdAt": "2026-11-20",
+  "branch": "feat/single-world-start",
+  "base_branch": "main",
+  "relatedFiles": [
+    "runtime.lock.json",
+    "config.lock.json",
+    "scripts",
+    "config",
+    "settings",
+    "tests",
+    "docs/SINGLE-WORLD-SOP.md"
+  ],
+  "completedAt": "2026-11-20"
+}

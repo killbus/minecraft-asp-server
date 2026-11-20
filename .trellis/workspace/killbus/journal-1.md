@@ -251,3 +251,34 @@ frpc-shared-tcp now reports each --tls-cert subject, SANs, notAfter, remaining d
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: Port deployment tooling to native single-world startup
+<!-- trellis-session: v=2 fp=4cdbf1453eca5a29 -->
+
+**Date**: 2026-11-20
+**Task**: Port deployment tooling to native single-world startup
+**Branch**: `feat/single-world-start`
+
+### Summary
+
+Adapt later deployment commits on feat/single-world-start. Native packs, protected saves, complete snapshots and world forwarding retain main transport behavior. Main and frozen integration remain unchanged.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `36046e9` | feat(scripts): restore commit subject boundary checks |
+| `7307c99` | feat(server): restore deployment tooling for native world selection |
+
+### Testing
+
+- [OK] 307 runnable tests pass across full discovery and affected-module rerun; 10 platform checks skipped. No real server deployment.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Operator tests the published branch on a stopped deployment using SINGLE-WORLD-SOP.

@@ -41,7 +41,8 @@ it does not provide a real HAProxy binary for a live transport smoke test.
   No lint or type-check toolchain is configured. Real HAProxy and client
   gameplay remain operator validation.
 
-## Remaining verification
+## Publication boundary
 
-Verify the published branch hash after committing the reviewed port. No
-gameplay or production deployment result is claimed.
+Work commits are `36046e9` (gate) and `7307c99` (deployment port). Publication
+targets only `feat/single-world-start`; main and the integration freeze remain
+unchanged. No gameplay or production deployment result is claimed.
